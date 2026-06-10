@@ -297,12 +297,18 @@ async def _handle_batch_transactions(
             amount = int(item.get("amount_k", 0)) * 1000
             description = item.get("description", "")
             tx_type = item.get("type", "chi")
+            date_day = item.get("date_day")
+            date_month = item.get("date_month")
+            date_offset = item.get("date_offset", 0)
         else:
             amount = item.amount
             description = item.description
             tx_type = item.tx_type
+            date_day = item.date_day
+            date_month = item.date_month
+            date_offset = 0
         if amount > 0 and description:
-            parsed.append((tx_type, amount, description))
+            parsed.append((tx_type, amount, description, date_day, date_month, date_offset))
 
     if not parsed:
         await status_msg.edit_text("❓ Không ghi được khoản nào.")
@@ -310,22 +316,28 @@ async def _handle_batch_transactions(
 
     await status_msg.edit_text(f"📝 Đã ghi {len(parsed)} khoản:")
 
-    for tx_type, amount, description in parsed:
+    for tx_type, amount, description, date_day, date_month, date_offset in parsed:
         cat_key, _ = await classify(description, amount, tx_type)
         cat_disp = category_display(cat_key)
         amt_str = format_amount(amount)
         tx_id = str(uuid.uuid4())[:8]
-        timestamp = now_vn()
+        if date_day:
+            timestamp = _resolve_timestamp(date_day, date_month)
+        elif date_offset:
+            timestamp = now_vn() + timedelta(days=date_offset)
+        else:
+            timestamp = now_vn()
 
         context.user_data[f"tx_desc_{tx_id}"] = description
         context.user_data[f"tx_type_{tx_id}"] = tx_type
         context.user_data[f"tx_ts_{tx_id}"] = timestamp
 
         name_tag = f" _({uname})_" if uname else ""
+        date_line = f"\n📅 {timestamp.day}/{timestamp.month}" if (date_day or date_offset) else ""
         if tx_type == "thu":
-            text = f"💰 Thu nhập: {amt_str}{name_tag}\n{cat_disp} — \"{description}\""
+            text = f"💰 Thu nhập: {amt_str}{name_tag}\n{cat_disp} — \"{description}\"{date_line}"
         else:
-            text = f"✅ Đã ghi: {amt_str}{name_tag}\n{cat_disp} — \"{description}\""
+            text = f"✅ Đã ghi: {amt_str}{name_tag}\n{cat_disp} — \"{description}\"{date_line}"
 
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✏️ Sửa phân loại", callback_data=f"fix_cat_{tx_id}"),
