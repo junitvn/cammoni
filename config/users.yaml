@@ -1,6 +1,5 @@
-# Whitelist of allowed Telegram chat IDs
-# Add your family members' chat IDs here
-# Get your chat ID by messaging @userinfobot on Telegram
-allowed_users:
-  - 1024403012
-  - 8778261847
+# Whitelist of allowed Telegram user IDs with display names.
+# Format: user_id: "Tên hiển thị"
+users:
+  1024403012: "Lâm"
+  8778261847: "Thành viên"

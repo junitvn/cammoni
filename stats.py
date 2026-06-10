@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from sheets import get_transactions_range, get_budgets, now_vn, TZ
 from classifier import CATEGORY_INFO, CATEGORY_KEYS
 from parser import format_amount
+import users as user_store
 
 PERIODS = {
     "today": "Hôm nay",
@@ -144,7 +145,9 @@ def format_top_text(rows: list, period_label: str, limit: int = 10) -> str:
         info = CATEGORY_INFO.get(cat, {"emoji": "📦", "name": cat})
         desc = str(row.get("description", ""))
         ts = str(row.get("timestamp", ""))[:5]  # dd/mm
-        lines.append(f"{i}. {info['emoji']} {format_amount(amt)} — {desc} _{ts}_")
+        name = user_store.get_name(row.get("user", ""))
+        name_part = f" _({name})_" if name else ""
+        lines.append(f"{i}. {info['emoji']} {format_amount(amt)} — {desc} _{ts}_{name_part}")
 
     return "\n".join(lines)
 

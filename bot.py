@@ -28,8 +28,9 @@ from classifier import (
 from sheets import (
     add_transaction, update_transaction_field, now_vn, format_ts, init_sheets,
     upsert_config_mapping, load_categories_from_sheet, load_users_from_sheet,
-    TZ,
+    load_user_names_from_sheet, TZ,
 )
+import users as user_store
 from stats import compute_stats, format_stats_text, check_budget_warning, format_top_text
 from charts import generate_charts
 from editor import get_editor_conversation_handler
@@ -61,7 +62,16 @@ def _load_allowed_users_from_yaml() -> set[int]:
         import yaml
         with open("config/users.yaml") as f:
             data = yaml.safe_load(f)
-        ids = data.get("allowed_users", []) if isinstance(data, dict) else []
+        if not isinstance(data, dict):
+            return set()
+        # New format: {users: {id: name}}
+        if "users" in data:
+            id_map = data["users"] or {}
+            names = {int(k): str(v) for k, v in id_map.items() if v}
+            user_store.set_names(names)
+            return set(names.keys())
+        # Legacy format: {allowed_users: [id, ...]}
+        ids = data.get("allowed_users", [])
         return {int(x) for x in ids if str(x).strip()}
     except Exception:
         return set()
@@ -230,16 +240,20 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data[f"tx_ts_{tx_id}"] = timestamp
 
     date_line = f"\n📅 {timestamp.day}/{timestamp.month}" if result.date_day else ""
+    display_name = user_store.get_name(
+        update.effective_user.id, update.effective_user.first_name or ""
+    )
+    name_tag = f" _({display_name})_" if display_name else ""
     if result.tx_type == "thu":
-        reply_text = f"💰 Thu nhập: {amt_str}\n{cat_disp} — \"{result.description}\"{date_line}"
+        reply_text = f"💰 Thu nhập: {amt_str}{name_tag}\n{cat_disp} — \"{result.description}\"{date_line}"
     else:
-        reply_text = f"✅ Đã ghi: {amt_str}\n{cat_disp} — \"{result.description}\"{date_line}"
+        reply_text = f"✅ Đã ghi: {amt_str}{name_tag}\n{cat_disp} — \"{result.description}\"{date_line}"
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✏️ Sửa phân loại", callback_data=f"fix_cat_{tx_id}"),
         InlineKeyboardButton("📅 Sửa ngày", callback_data=f"fix_date_{tx_id}"),
     ]])
-    await update.message.reply_text(reply_text, reply_markup=keyboard)
+    await update.message.reply_text(reply_text, reply_markup=keyboard, parse_mode="Markdown")
 
     # Write to sheet in background (async, no executor needed)
     async def _save():
@@ -787,13 +801,21 @@ async def _post_init(app) -> None:
             logger.info(f"[bot] loaded {len(yaml_users)} allowed users from config/users.yaml")
     if not os.getenv("ALLOWED_USERS") and not ALLOWED_USERS:
         try:
-            users = await load_users_from_sheet()
-            if users:
+            sheet_users = await load_users_from_sheet()
+            if sheet_users:
                 ALLOWED_USERS.clear()
-                ALLOWED_USERS.update(users)
-                logger.info(f"[bot] loaded {len(users)} allowed users from sheet")
+                ALLOWED_USERS.update(sheet_users)
+                logger.info(f"[bot] loaded {len(sheet_users)} allowed users from sheet")
         except Exception as e:
             logger.warning(f"load_users failed (non-fatal): {e}")
+
+    try:
+        sheet_names = await load_user_names_from_sheet()
+        if sheet_names:
+            user_store.update_names(sheet_names)
+            logger.info(f"[bot] loaded {len(sheet_names)} user names from sheet")
+    except Exception as e:
+        logger.warning(f"load_user_names failed (non-fatal): {e}")
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

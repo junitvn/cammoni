@@ -462,6 +462,24 @@ async def load_users_from_sheet() -> set[int]:
     return result
 
 
+async def load_user_names_from_sheet() -> dict[int, str]:
+    """Load {user_id: name} mapping from the Users sheet."""
+    rows = await _get_values("Users!A:B")
+    if not rows or rows[0] != USERS_HEADER:
+        return {}
+    result = {}
+    for row in rows[1:]:
+        row = _pad_row(row, 2)
+        try:
+            uid = int(row[0])
+            name = str(row[1]).strip()
+            if name:
+                result[uid] = name
+        except (ValueError, TypeError):
+            pass
+    return result
+
+
 async def get_config_mappings() -> dict[str, str]:
     """Returns {description_lower: category_key} from Config sheet, with in-memory cache."""
     global _config_cache

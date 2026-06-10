@@ -14,6 +14,7 @@ from sheets import (
 )
 from classifier import CATEGORY_INFO, CATEGORY_KEYS, INCOME_CATEGORY_KEYS, EXPENSE_CATEGORY_KEYS
 from parser import format_amount
+import users as user_store
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,9 @@ def _transaction_line(row: dict) -> str:
     cat = str(row.get("category", "khac"))
     info = CATEGORY_INFO.get(cat, {"emoji": "📦", "name": cat})
     desc = str(row.get("description", ""))
-    return f"{type_icon} {ts} · {amt} · {info['emoji']} {desc}"
+    name = user_store.get_name(row.get("user", ""))
+    name_part = f" · {name}" if name else ""
+    return f"{type_icon} {ts} · {amt} · {info['emoji']} {desc}{name_part}"
 
 
 async def cmd_sua(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
