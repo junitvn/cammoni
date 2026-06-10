@@ -54,6 +54,8 @@ async def compute_stats(
     by_cat: dict[str, int] = {k: 0 for k in CATEGORY_KEYS}
 
     for row in rows:
+        if str(row.get("excluded", "")).strip().upper() == "Y":
+            continue
         try:
             amt = int(row.get("amount", 0))
         except (ValueError, TypeError):
@@ -82,6 +84,8 @@ async def compute_stats(
         monthly_by_cat: dict[str, int] = {k: 0 for k in CATEGORY_KEYS}
         monthly_total = 0
         for row in all_month_rows:
+            if str(row.get("excluded", "")).strip().upper() == "Y":
+                continue
             if str(row.get("type", "chi")) == "chi":
                 try:
                     amt = int(row.get("amount", 0))

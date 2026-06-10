@@ -19,7 +19,10 @@ rcParams["font.family"] = ["DejaVu Sans", "Noto Sans", "sans-serif"]
 
 # Category colors
 _COLORS = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD"]
-_CAT_COLORS = {key: _COLORS[i % len(_COLORS)] for i, key in enumerate(CATEGORY_KEYS)}
+
+
+def _cat_colors() -> dict:
+    return {key: _COLORS[i % len(_COLORS)] for i, key in enumerate(CATEGORY_KEYS)}
 
 
 def _make_pie(by_category: dict[str, int], title: str) -> bytes:
@@ -27,13 +30,14 @@ def _make_pie(by_category: dict[str, int], title: str) -> bytes:
     sizes = []
     colors = []
 
+    cat_colors = _cat_colors()
     for key in CATEGORY_KEYS:
         amt = by_category.get(key, 0)
         if amt > 0:
-            info = CATEGORY_INFO[key]
+            info = CATEGORY_INFO.get(key, {"emoji": "📦", "name": key})
             labels.append(f"{info['emoji']} {info['name']}\n{format_amount(amt)}")
             sizes.append(amt)
-            colors.append(_CAT_COLORS[key])
+            colors.append(cat_colors.get(key, _COLORS[0]))
 
     if not sizes:
         return _empty_chart("Chưa có dữ liệu")
@@ -93,12 +97,13 @@ def _make_bar(transactions: list[dict], title: str) -> bytes:
     bar_width = 0.6
     bottoms = [0] * len(days)
 
+    cat_colors = _cat_colors()
     for key in CATEGORY_KEYS:
         values = [daily[d].get(key, 0) / 1_000_000 for d in days]  # show as millions
         if sum(values) == 0:
             continue
-        info = CATEGORY_INFO[key]
-        ax.bar(days, values, bar_width, bottom=bottoms, color=_CAT_COLORS[key],
+        info = CATEGORY_INFO.get(key, {"emoji": "📦", "name": key})
+        ax.bar(days, values, bar_width, bottom=bottoms, color=cat_colors.get(key, _COLORS[0]),
                label=f"{info['emoji']} {info['name']}")
         bottoms = [b + v for b, v in zip(bottoms, values)]
 

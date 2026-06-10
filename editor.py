@@ -13,8 +13,17 @@ from sheets import (
     delete_transaction, parse_ts, format_ts, upsert_config_mapping,
 )
 from classifier import CATEGORY_INFO, CATEGORY_KEYS, INCOME_CATEGORY_KEYS, EXPENSE_CATEGORY_KEYS
-from parser import format_amount, parse_amount_search, format_amount_range
+from parser import format_amount, parse_amount_search, format_amount_range, normalize_vn
+from sheets import parse_ts as _parse_ts
 import users as user_store
+
+
+def _find_category_key(query: str) -> Optional[str]:
+    q = normalize_vn(query.lower())
+    for key, info in CATEGORY_INFO.items():
+        if normalize_vn(info.get("name", "").lower()) == q or normalize_vn(key) == q:
+            return key
+    return None
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +60,7 @@ async def _send_edit_page(
     rows: list,
     offset: int,
     search_label: str = "",
+    mode: str = "edit",
 ) -> None:
     page = rows[offset:offset + PAGE_SIZE]
     total = len(rows)
@@ -61,10 +71,20 @@ async def _send_edit_page(
         tx_id = str(row["id"])
         label = _transaction_line(row)
         keyboard.append([InlineKeyboardButton(label, callback_data="noop")])
-        keyboard.append([
-            InlineKeyboardButton("✏️ Sửa", callback_data=f"edit_{tx_id}"),
-            InlineKeyboardButton("🗑️ Xóa", callback_data=f"del_{tx_id}"),
-        ])
+        if mode == "search":
+            keyboard.append([
+                InlineKeyboardButton("✏️ Phân loại", callback_data=f"fix_cat_{tx_id}"),
+                InlineKeyboardButton("📅 Ngày", callback_data=f"fix_date_{tx_id}"),
+            ])
+            keyboard.append([
+                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
+                InlineKeyboardButton("🚫 Không tính", callback_data=f"qexcl_{tx_id}"),
+            ])
+        else:
+            keyboard.append([
+                InlineKeyboardButton("✏️ Sửa", callback_data=f"edit_{tx_id}"),
+                InlineKeyboardButton("🗑️ Xóa", callback_data=f"del_{tx_id}"),
+            ])
 
     if shown < total:
         keyboard.append([InlineKeyboardButton(
@@ -86,35 +106,55 @@ async def _send_edit_page(
 
 async def cmd_sua(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = " ".join(context.args).strip() if context.args else ""
+    is_search = update.message.text.strip().startswith("/search")
     keyword = None
     amount_min = amount_max = None
+    category = None
     search_label = ""
 
     if raw:
-        amt_range = parse_amount_search(raw)
-        if amt_range:
-            amount_min, amount_max, search_label = amt_range
+        cat_key = _find_category_key(raw)
+        if cat_key:
+            category = cat_key
+            info = CATEGORY_INFO.get(cat_key, {"emoji": "📦", "name": raw})
+            search_label = f"{info['emoji']} {info['name']}"
         else:
-            keyword = raw
-            search_label = raw
+            amt_range = parse_amount_search(raw)
+            if amt_range:
+                amount_min, amount_max, search_label = amt_range
+            else:
+                keyword = raw
+                search_label = raw
 
     rows = await get_recent_transactions(
         limit=100, keyword=keyword,
         amount_min=amount_min, amount_max=amount_max,
+        category=category,
     )
 
     if not rows:
-        if search_label:
-            await update.message.reply_text(f"Không tìm thấy kết quả cho \"{search_label}\".")
-        else:
-            await update.message.reply_text("Không tìm thấy khoản nào.")
+        msg = f"Không tìm thấy kết quả cho \"{search_label}\"." if search_label else "Không tìm thấy khoản nào."
+        await update.message.reply_text(msg)
         return ConversationHandler.END
 
     context.user_data["edit_rows"] = {str(r["id"]): r for r in rows}
     context.user_data["edit_all_rows"] = rows
     context.user_data["edit_search_label"] = search_label
+    mode = "search" if is_search else "edit"
+    context.user_data["edit_mode"] = mode
 
-    await _send_edit_page(update.message, rows, offset=0, search_label=search_label)
+    # Populate user_data for fix_cat/fix_date callbacks to work from search
+    for row in rows:
+        tid = str(row.get("id", ""))
+        if not tid:
+            continue
+        context.user_data[f"tx_type_{tid}"] = row.get("type", "chi")
+        context.user_data[f"tx_desc_{tid}"] = row.get("description", "")
+        ts = _parse_ts(str(row.get("timestamp", "")))
+        if ts:
+            context.user_data[f"tx_ts_{tid}"] = ts
+
+    await _send_edit_page(update.message, rows, offset=0, search_label=search_label, mode=mode)
     return EDIT_LIST
 
 
@@ -127,7 +167,8 @@ async def edit_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         offset = int(data.replace("editmore_", ""))
         rows = context.user_data.get("edit_all_rows", [])
         search_label = context.user_data.get("edit_search_label", "")
-        await _send_edit_page(query.message, rows, offset, search_label=search_label)
+        mode = context.user_data.get("edit_mode", "edit")
+        await _send_edit_page(query.message, rows, offset, search_label=search_label, mode=mode)
         return EDIT_LIST
 
     if data.startswith("edit_"):

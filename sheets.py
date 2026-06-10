@@ -37,10 +37,11 @@ COL_CATEGORY = 5
 COL_DESCRIPTION = 6
 COL_AUTO = 7
 COL_USER_NAME = 8
+COL_EXCLUDED = 9
 
 TRANSACTIONS_HEADER = [
     "id", "timestamp", "user", "type", "amount",
-    "category", "description", "auto_classified", "user_name"
+    "category", "description", "auto_classified", "user_name", "excluded"
 ]
 BUDGET_HEADER = ["scope", "limit_vnd", "period"]
 CONFIG_HEADER = ["description", "category"]
@@ -54,7 +55,9 @@ _CATEGORIES_SEED = [
     ["di_cho", "Đi chợ", "🛒", "",
      "chợ, rau, thịt, cá, siêu thị, bách hóa, đồ ăn, gạo, vinmart, winmart, coopmart, bigc, lotte mart, aeon, go!, tops market, trứng, sữa, hoa quả, trái cây, mắm, muối, dầu ăn, gia vị, mì tôm, đồ khô, tạp hóa, quầy, mua đồ, thực phẩm"],
     ["bat_buoc", "Chi tiêu bắt buộc", "📌", "",
-     "điện, nước, internet, wifi, tiền nhà, thuê nhà, học phí, bảo hiểm, thuế, viện phí, bệnh viện, khám, thuốc, điện thoại, phone, sim, phí, hóa đơn, bill, trả góp, vay, nợ, đóng tiền, học, trường, gas"],
+     "điện, nước, internet, wifi, tiền nhà, thuê nhà, học phí, bảo hiểm, thuế, điện thoại, phone, sim, phí, hóa đơn, bill, trả góp, vay, nợ, đóng tiền, học, trường, gas"],
+    ["y_te", "Y tế", "🏥", "",
+     "viện phí, bệnh viện, khám bệnh, thuốc, dược, phòng khám, cấp cứu, nha khoa, mắt, da liễu, xét nghiệm, siêu âm, chụp x-quang, vaccine, tiêm phòng, spa, thẩm mỹ, khám, thuốc"],
     ["phuong_tien", "Phương tiện đi lại", "🚗", "",
      "grab, xe, xăng, gửi xe, taxi, vé, sửa xe, bus, xe bus, tàu, máy bay, vé tàu, vé máy bay, uber, be, gojek, xe ôm, đỗ xe, parking, rửa xe, bảo dưỡng xe, thay nhớt, lốp xe, ắc quy, đăng kiểm, bằng lái, phí cầu đường, eto, vinbus"],
     ["dau_tu", "Đầu tư", "📈", "",
@@ -315,6 +318,7 @@ async def add_transaction(
     timestamp: Optional[datetime] = None,
     tx_id: Optional[str] = None,
     user_name: str = "",
+    excluded: bool = False,
 ) -> str:
     if timestamp is None:
         timestamp = now_vn()
@@ -331,9 +335,10 @@ async def add_transaction(
         description,
         "Y" if auto_classified else "N",
         user_name,
+        "Y" if excluded else "",
     ]
     logger.info(f"[sheets] add_transaction: writing tx_id={tx_id}")
-    await _append_values("Transactions!A:I", [row])
+    await _append_values("Transactions!A:J", [row])
     logger.info(f"[sheets] add_transaction: done tx_id={tx_id}")
     return tx_id
 
@@ -344,8 +349,9 @@ async def get_recent_transactions(
     keyword: Optional[str] = None,
     amount_min: Optional[int] = None,
     amount_max: Optional[int] = None,
+    category: Optional[str] = None,
 ) -> list[dict]:
-    rows = await _get_values("Transactions!A:I")
+    rows = await _get_values("Transactions!A:J")
     if not rows or rows[0] != TRANSACTIONS_HEADER:
         return []
 
@@ -357,6 +363,8 @@ async def get_recent_transactions(
         if user_id and d.get("user") != str(user_id):
             continue
         if keyword and normalize_vn(keyword) not in normalize_vn(d.get("description", "")):
+            continue
+        if category and d.get("category") != category:
             continue
         if amount_min is not None or amount_max is not None:
             try:
@@ -373,7 +381,7 @@ async def get_recent_transactions(
 
 
 async def get_transaction_by_id(tx_id: str) -> Optional[tuple[int, dict]]:
-    rows = await _get_values("Transactions!A:I")
+    rows = await _get_values("Transactions!A:J")
     if not rows:
         return None
     for i, row in enumerate(rows[1:], start=2):
@@ -392,6 +400,7 @@ async def update_transaction_field(tx_id: str, field: str, value) -> bool:
         "description": COL_DESCRIPTION,
         "auto_classified": COL_AUTO,
         "user_name": COL_USER_NAME,
+        "excluded": COL_EXCLUDED,
     }
     col = col_map.get(field)
     if col is None:
@@ -422,7 +431,7 @@ async def get_transactions_range(
     end: datetime,
     user_id: Optional[str] = None,
 ) -> list[dict]:
-    rows = await _get_values("Transactions!A:I")
+    rows = await _get_values("Transactions!A:J")
     if not rows or rows[0] != TRANSACTIONS_HEADER:
         return []
 

@@ -28,7 +28,8 @@ from classifier import (
 from sheets import (
     add_transaction, update_transaction_field, now_vn, format_ts, init_sheets,
     upsert_config_mapping, load_categories_from_sheet, load_users_from_sheet,
-    load_user_names_from_sheet, TZ,
+    load_user_names_from_sheet, set_budget, delete_transaction,
+    get_transaction_by_id, TZ,
 )
 import users as user_store
 from stats import compute_stats, format_stats_text, check_budget_warning, format_top_text
@@ -340,10 +341,16 @@ async def _handle_batch_transactions(
         else:
             text = f"✅ Đã ghi: {amt_str}{name_tag}\n{cat_disp} — \"{description}\"{date_line}"
 
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✏️ Sửa phân loại", callback_data=f"fix_cat_{tx_id}"),
-            InlineKeyboardButton("📅 Sửa ngày", callback_data=f"fix_date_{tx_id}"),
-        ]])
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✏️ Phân loại", callback_data=f"fix_cat_{tx_id}"),
+                InlineKeyboardButton("📅 Ngày", callback_data=f"fix_date_{tx_id}"),
+            ],
+            [
+                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
+                InlineKeyboardButton("🚫 Không tính", callback_data=f"qexcl_{tx_id}"),
+            ],
+        ])
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
         async def _save(u=uid, un=uname, tt=tx_type, a=amount, ck=cat_key,
@@ -386,8 +393,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         result = await transcribe_voice(audio_bytes)
 
-        if result["intent"] == "search":
+        intent = result.get("intent", "record")
+        if intent == "search":
             await _handle_voice_search(update, context, msg, result)
+        elif intent == "budget":
+            await _handle_voice_budget(update, context, msg, result)
+        elif intent == "category_filter":
+            await _handle_voice_category_filter(update, context, msg, result)
         else:
             transactions = result.get("transactions", [])
             if not transactions:
@@ -459,6 +471,54 @@ async def _handle_voice_search(
             callback_data=f"txlist_{uid}_{shown}",
         )])
 
+    await msg.edit_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+        parse_mode="Markdown",
+    )
+
+
+async def _handle_voice_budget(update, context, msg, result: dict) -> None:
+    scope = str(result.get("scope", "chung"))
+    amount_k = int(result.get("amount_k", 0))
+    if amount_k <= 0:
+        await msg.edit_text("❓ Không nhận ra số tiền ngân sách.")
+        return
+    await set_budget(scope, amount_k * 1000)
+    label = "Tổng chi" if scope == "chung" else CATEGORY_INFO.get(scope, {"name": scope}).get("name", scope)
+    await msg.edit_text(
+        f"✅ Đã đặt ngân sách *{label}*: {format_amount(amount_k * 1000)}/tháng",
+        parse_mode="Markdown",
+    )
+
+
+async def _handle_voice_category_filter(update, context, msg, result: dict) -> None:
+    from sheets import get_recent_transactions
+    category = str(result.get("category", ""))
+    if not category:
+        await msg.edit_text("❓ Không nhận ra danh mục.")
+        return
+    rows = await get_recent_transactions(limit=100, category=category)
+    info = CATEGORY_INFO.get(category, {"emoji": "📦", "name": category})
+    label = f"{info['emoji']} {info['name']}"
+    if not rows:
+        await msg.edit_text(f"Không tìm thấy giao dịch nào cho {label}.")
+        return
+    uid = update.effective_user.id
+    rows_desc = list(reversed(rows))
+    context.user_data[f"txlist_rows_{uid}"] = rows_desc
+    context.user_data[f"txlist_label_{uid}"] = label
+    total = len(rows_desc)
+    shown = min(_PAGE_SIZE, total)
+    lines = [f"🔍 *{label}* ({shown}/{total})\n"]
+    for row in rows_desc[:shown]:
+        lines.append(_tx_list_line(row))
+    kb = []
+    if shown < total:
+        kb.append([InlineKeyboardButton(
+            f"⬇️ Load thêm ({total - shown} còn lại)",
+            callback_data=f"txlist_{uid}_{shown}",
+        )])
     await msg.edit_text(
         "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(kb) if kb else None,
@@ -594,6 +654,67 @@ async def handle_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text(f"✅ Đã đổi ngày: {day}/{month}")
     else:
         await update.message.reply_text("❌ Không tìm thấy khoản.")
+
+
+# ── Quick delete / exclude handlers ──────────────────────────────────────────
+
+async def handle_qdel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    tx_id = query.data.replace("qdel_", "")
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Xác nhận xóa", callback_data=f"qdelok_{tx_id}"),
+        InlineKeyboardButton("❌ Hủy", callback_data=f"qdelno_{tx_id}"),
+    ]])
+    await query.edit_message_reply_markup(reply_markup=keyboard)
+
+
+async def handle_qdelok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if query.data.startswith("qdelno_"):
+        # Restore keyboard
+        tx_id = query.data.replace("qdelno_", "")
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✏️ Phân loại", callback_data=f"fix_cat_{tx_id}"),
+                InlineKeyboardButton("📅 Ngày", callback_data=f"fix_date_{tx_id}"),
+            ],
+            [
+                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
+                InlineKeyboardButton("🚫 Không tính", callback_data=f"qexcl_{tx_id}"),
+            ],
+        ])
+        await query.edit_message_reply_markup(reply_markup=keyboard)
+        return
+    tx_id = query.data.replace("qdelok_", "")
+    ok = await delete_transaction(tx_id)
+    first_line = (query.message.text or "").split("\n")[0]
+    if ok:
+        await query.edit_message_text(f"🗑️ Đã xóa: {first_line}")
+    else:
+        await query.edit_message_text("❌ Không tìm thấy khoản.")
+
+
+async def handle_qexcl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    tx_id = query.data.replace("qexcl_", "")
+    result = await get_transaction_by_id(tx_id)
+    if not result:
+        await query.answer("Không tìm thấy khoản.", show_alert=True)
+        return
+    _, row = result
+    currently_excluded = str(row.get("excluded", "")).strip().upper() == "Y"
+    new_val = "" if currently_excluded else "Y"
+    await update_transaction_field(tx_id, "excluded", new_val)
+    old_text = query.message.text or ""
+    lines = [l for l in old_text.split("\n") if not l.startswith("🚫") and not l.startswith("✅ Đã tính")]
+    base = "\n".join(lines)
+    if new_val == "Y":
+        await query.edit_message_text(f"{base}\n🚫 _Không tính vào ngân sách_", parse_mode="Markdown")
+    else:
+        await query.edit_message_text(f"{base}\n✅ _Đã tính vào ngân sách_", parse_mode="Markdown")
 
 
 # ── Stats keyboard handlers ───────────────────────────────────────────────────
@@ -864,6 +985,9 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_fix_date, pattern=r"^fix_date_"))
     app.add_handler(CallbackQueryHandler(handle_setdate, pattern=r"^setdate_"))
     app.add_handler(CallbackQueryHandler(handle_inputdate, pattern=r"^inputdate_"))
+    app.add_handler(CallbackQueryHandler(handle_qdel, pattern=r"^qdel_"))
+    app.add_handler(CallbackQueryHandler(handle_qdelok, pattern=r"^(qdelok_|qdelno_)"))
+    app.add_handler(CallbackQueryHandler(handle_qexcl, pattern=r"^qexcl_"))
     app.add_handler(CallbackQueryHandler(handle_txlist, pattern=r"^txlist_"))
     app.add_handler(CallbackQueryHandler(handle_chart_callback, pattern=r"^chart_"))
     app.add_handler(CallbackQueryHandler(handle_menu_callback, pattern=r"^menu_"))

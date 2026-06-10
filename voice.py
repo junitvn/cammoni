@@ -20,6 +20,10 @@ Hãy xác định ý định (intent):
   Ví dụ: "ăn cơm 50", "đổ xăng 200k", "mua sữa 30 hôm qua", "thu lương 5 triệu".
 - "search": người dùng muốn TÌM KIẾM / XEM LẠI giao dịch đã lưu.
   Ví dụ: "tìm cơm", "kiếm xăng", "50k có gì", "tìm khoảng 200", "grab tuần này".
+- "budget": người dùng muốn ĐẶT NGÂN SÁCH.
+  Ví dụ: "đặt ngân sách ăn ngoài 3 triệu", "ngân sách tổng 15 triệu", "set budget xăng xe 500k".
+- "category_filter": người dùng muốn XEM DANH SÁCH THEO DANH MỤC.
+  Ví dụ: "xem ăn ngoài", "liệt kê y tế", "danh sách xăng xe tháng này".
 
 Trả về JSON (KHÔNG có markdown):
 
@@ -44,6 +48,12 @@ Nếu intent = "search":
   "keyword": "<từ khoá tìm theo mô tả, hoặc null nếu không có>",
   "amount_search": "<chuỗi tìm theo tiền: '50'=50k-59k, '<200'=dưới 200k, '>50'=trên 50k, '<=200'=tối đa 200k, '>=50'=tối thiểu 50k, '50-200'=từ 50k đến 200k; hoặc null>"
 }
+
+Nếu intent = "budget":
+{"intent": "budget", "scope": "<'chung' hoặc category key: an_ngoai|di_cho|bat_buoc|y_te|phuong_tien|dau_tu|khac>", "amount_k": <số tiền nghìn đồng>}
+
+Nếu intent = "category_filter":
+{"intent": "category_filter", "category": "<category key: an_ngoai|di_cho|bat_buoc|y_te|phuong_tien|dau_tu|khac|luong|thu_khac>"}
 
 Chỉ trả về JSON, không giải thích."""
 
@@ -79,6 +89,16 @@ async def transcribe_voice(audio_bytes: bytes) -> dict:
             "keyword": data.get("keyword") or None,
             "amount_search": str(data["amount_search"]) if data.get("amount_search") else None,
         }
+
+    if intent == "budget":
+        try:
+            amount_k = int(data.get("amount_k", 0))
+        except (ValueError, TypeError):
+            amount_k = 0
+        return {"intent": "budget", "scope": str(data.get("scope", "chung")), "amount_k": amount_k}
+
+    if intent == "category_filter":
+        return {"intent": "category_filter", "category": str(data.get("category", ""))}
 
     # Parse record intent
     transactions = []
