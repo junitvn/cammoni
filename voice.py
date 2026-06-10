@@ -1,6 +1,6 @@
 """
 Voice message transcription using Gemini.
-Extracts transactions directly from audio.
+transcribe_voice() returns either a "record" or "search" intent.
 """
 import asyncio
 import base64
@@ -26,30 +26,48 @@ def _get_model():
     return _model
 
 
-async def transcribe_to_transactions(audio_bytes: bytes) -> list[dict]:
+_PROMPT = """Đây là tin nhắn thoại tiếng Việt liên quan đến quản lý chi tiêu.
+
+Hãy xác định ý định (intent):
+- "record": người dùng muốn GHI CHÉP một hoặc nhiều khoản thu/chi.
+  Ví dụ: "ăn cơm 50", "đổ xăng 200k", "mua sữa 30 hôm qua", "thu lương 5 triệu".
+- "search": người dùng muốn TÌM KIẾM / XEM LẠI giao dịch đã lưu.
+  Ví dụ: "tìm cơm", "kiếm xăng", "50k có gì", "tìm khoảng 200", "grab tuần này".
+
+Trả về JSON (KHÔNG có markdown):
+
+Nếu intent = "record":
+{
+  "intent": "record",
+  "transactions": [
+    {
+      "amount_k": <số tiền nghìn đồng>,
+      "description": "<mô tả>",
+      "type": "chi" | "thu",
+      "date_day": <ngày 1-31 nếu đề cập, else null>,
+      "date_month": <tháng 1-12 nếu đề cập cùng ngày, else null>,
+      "date_offset": <0=hôm nay, -1=hôm qua, -2=hôm kia; mặc định 0>
+    }
+  ]
+}
+
+Nếu intent = "search":
+{
+  "intent": "search",
+  "keyword": "<từ khoá tìm theo mô tả, hoặc null nếu không có>",
+  "amount_search": "<chuỗi số để tìm theo khoảng tiền, ví dụ '50' hoặc '200', hoặc null>"
+}
+
+Chỉ trả về JSON, không giải thích."""
+
+
+async def transcribe_voice(audio_bytes: bytes) -> dict:
     """
-    Send OGG voice bytes to Gemini, return extracted transactions.
-    Each item: {"amount_k": int, "description": str, "type": "chi"|"thu"}
+    Transcribe voice and return intent dict:
+      {"intent": "record", "transactions": [...]}
+      {"intent": "search", "keyword": str|None, "amount_search": str|None}
     """
     model = _get_model()
-
-    prompt = (
-        "Đây là tin nhắn thoại tiếng Việt dùng để ghi chép thu chi hàng ngày. "
-        "Hãy nhận dạng giọng nói và trích xuất tất cả các khoản thu/chi được đề cập. "
-        "Trả về JSON array, mỗi phần tử gồm:\n"
-        '  {"amount_k": <số tiền đơn vị nghìn đồng, kiểu số>, '
-        '"description": "<mô tả ngắn gọn>", '
-        '"type": "chi" hoặc "thu", '
-        '"date_day": <ngày trong tháng 1-31 nếu được đề cập, không thì null>, '
-        '"date_month": <tháng 1-12 nếu được đề cập cùng ngày, không thì null>, '
-        '"date_offset": <số ngày so với hôm nay: 0=hôm nay, -1=hôm qua, -2=hôm kia; '
-        'mặc định 0, chỉ dùng khi không có date_day>}\n'
-        "Ví dụ ngày: 'hôm qua' → date_offset=-1; 'ngày 15' → date_day=15; "
-        "'15 tháng 6' → date_day=15, date_month=6; 'hôm kia' → date_offset=-2.\n"
-        "Lưu ý: nếu không có prefix + hoặc . thì mặc định là chi (expense). "
-        "Chỉ trả về JSON array, không giải thích thêm. "
-        "Nếu không nghe rõ hoặc không có khoản nào, trả về []."
-    )
 
     part = {
         "inline_data": {
@@ -61,20 +79,29 @@ async def transcribe_to_transactions(audio_bytes: bytes) -> list[dict]:
     loop = asyncio.get_event_loop()
     response = await loop.run_in_executor(
         None,
-        lambda: model.generate_content([part, prompt]),
+        lambda: model.generate_content([part, _PROMPT]),
     )
 
     raw = response.text.strip()
-    # Strip markdown fences if present
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
 
     data = json.loads(raw)
-    if not isinstance(data, list):
-        return []
+    if not isinstance(data, dict) or "intent" not in data:
+        return {"intent": "record", "transactions": []}
 
-    results = []
-    for item in data:
+    intent = data.get("intent", "record")
+
+    if intent == "search":
+        return {
+            "intent": "search",
+            "keyword": data.get("keyword") or None,
+            "amount_search": str(data["amount_search"]) if data.get("amount_search") else None,
+        }
+
+    # Parse record intent
+    transactions = []
+    for item in data.get("transactions", []):
         try:
             amount_k = int(item["amount_k"])
             description = str(item["description"]).strip()
@@ -91,8 +118,8 @@ async def transcribe_to_transactions(audio_bytes: bytes) -> list[dict]:
                     entry["date_month"] = int(date_month)
             elif date_offset:
                 entry["date_offset"] = int(date_offset)
-            results.append(entry)
+            transactions.append(entry)
         except (KeyError, ValueError, TypeError):
             continue
 
-    return results
+    return {"intent": "record", "transactions": transactions}

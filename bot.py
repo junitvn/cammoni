@@ -374,7 +374,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         import io
-        from voice import transcribe_to_transactions
+        from voice import transcribe_voice
+        from sheets import get_recent_transactions
+        from parser import parse_amount_search, format_amount_range
 
         voice = update.message.voice
         tg_file = await context.bot.get_file(voice.file_id)
@@ -382,20 +384,86 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await tg_file.download_to_memory(buf)
         audio_bytes = buf.getvalue()
 
-        transactions = await transcribe_to_transactions(audio_bytes)
+        result = await transcribe_voice(audio_bytes)
 
-        if not transactions:
-            await msg.edit_text(
-                "❓ Không nhận ra khoản thu/chi nào.\n"
-                "Thử nói rõ hơn, ví dụ: \"ba mươi cơm, năm mươi cháo\"."
-            )
-            return
-
-        await _handle_batch_transactions(update, context, msg, transactions)
+        if result["intent"] == "search":
+            await _handle_voice_search(update, context, msg, result)
+        else:
+            transactions = result.get("transactions", [])
+            if not transactions:
+                await msg.edit_text(
+                    "❓ Không nhận ra khoản thu/chi nào.\n"
+                    "Thử nói rõ hơn, ví dụ: \"ba mươi cơm, năm mươi cháo\"."
+                )
+                return
+            await _handle_batch_transactions(update, context, msg, transactions)
 
     except Exception as e:
         logger.exception(f"Voice handling failed: {e}")
         await msg.edit_text(f"❌ Lỗi xử lý giọng nói: {e}")
+
+
+async def _handle_voice_search(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    msg,
+    search_result: dict,
+) -> None:
+    from sheets import get_recent_transactions
+    from parser import parse_amount_search, format_amount_range
+
+    keyword = search_result.get("keyword") or None
+    amount_str = search_result.get("amount_search")
+    amount_min = amount_max = None
+
+    if amount_str:
+        amt_range = parse_amount_search(str(amount_str))
+        if amt_range:
+            amount_min, amount_max = amt_range
+
+    rows = await get_recent_transactions(
+        limit=100, keyword=keyword, amount_min=amount_min, amount_max=amount_max
+    )
+
+    if not rows:
+        parts = []
+        if keyword:
+            parts.append(f'"{keyword}"')
+        if amount_min is not None:
+            parts.append(format_amount_range(amount_min, amount_max))
+        await msg.edit_text(f"Không tìm thấy kết quả cho {' · '.join(parts) or 'tìm kiếm'}.")
+        return
+
+    uid = update.effective_user.id
+    rows_desc = list(reversed(rows))
+    context.user_data[f"txlist_rows_{uid}"] = rows_desc
+
+    label_parts = []
+    if keyword:
+        label_parts.append(keyword)
+    if amount_min is not None:
+        label_parts.append(format_amount_range(amount_min, amount_max))
+    label = " · ".join(label_parts) or "Tìm kiếm"
+    context.user_data[f"txlist_label_{uid}"] = label
+
+    total = len(rows_desc)
+    shown = min(_PAGE_SIZE, total)
+    lines = [f"🔍 *{label}* ({shown}/{total})\n"]
+    for row in rows_desc[:shown]:
+        lines.append(_tx_list_line(row))
+
+    kb = []
+    if shown < total:
+        kb.append([InlineKeyboardButton(
+            f"⬇️ Load thêm ({total - shown} còn lại)",
+            callback_data=f"txlist_{uid}_{shown}",
+        )])
+
+    await msg.edit_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+        parse_mode="Markdown",
+    )
 
 
 async def handle_fix_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
