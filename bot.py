@@ -419,7 +419,7 @@ async def _handle_voice_search(
     if amount_str:
         amt_range = parse_amount_search(str(amount_str))
         if amt_range:
-            amount_min, amount_max = amt_range
+            amount_min, amount_max, _ = amt_range
 
     rows = await get_recent_transactions(
         limit=100, keyword=keyword, amount_min=amount_min, amount_max=amount_max

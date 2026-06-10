@@ -42,7 +42,7 @@ Nếu intent = "search":
 {
   "intent": "search",
   "keyword": "<từ khoá tìm theo mô tả, hoặc null nếu không có>",
-  "amount_search": "<chuỗi số để tìm theo khoảng tiền, ví dụ '50' hoặc '200', hoặc null>"
+  "amount_search": "<chuỗi tìm theo tiền: '50'=50k-59k, '<200'=dưới 200k, '>50'=trên 50k, '<=200'=tối đa 200k, '>=50'=tối thiểu 50k, '50-200'=từ 50k đến 200k; hoặc null>"
 }
 
 Chỉ trả về JSON, không giải thích."""

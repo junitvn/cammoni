@@ -19,31 +19,89 @@ def normalize_vn(text: str) -> str:
     return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
 
 
-def parse_amount_search(s: str) -> Optional[tuple[int, int]]:
-    """
-    Parse an amount search string into a VND range (lo, hi inclusive).
-    Rule: first digit sets the band, number of digits sets the scale.
-      '10'  → 10k-19k   (1x pattern)
-      '200' → 200k-299k (2xx)
-      '244' → 200k-299k (same scale as 200)
-      '50'  → 50k-59k
-    Returns None if the string is not a pure number or is zero.
-    """
-    clean = re.sub(r"[,.\s]", "", s.strip())
-    if not clean.isdigit() or int(clean) == 0:
-        return None
-    n = len(clean)
-    first = int(clean[0])
-    scale = 10 ** (n - 1)          # n=2→10, n=3→100, n=4→1000
-    lo = first * scale * 1000       # convert thousands → VND
-    hi = (first + 1) * scale * 1000 - 1
-    return lo, hi
+def _parse_num(s: str) -> Optional[int]:
+    """Parse a number string (may have . or , as thousands sep) → int, or None."""
+    clean = re.sub(r"[,.\s]", "", s)
+    return int(clean) if clean.isdigit() and int(clean) > 0 else None
 
 
-def format_amount_range(lo: int, hi: int) -> str:
-    """'10.000đ-19.000đ' compact label for display."""
-    lo_k, hi_k = lo // 1000, (hi + 1) // 1000 - 1
-    return f"{lo_k:,}k-{hi_k:,}k".replace(",", ".")
+def _fmt_k(n: int) -> str:
+    return f"{n:,}".replace(",", ".") + "k"
+
+
+# (lo_vnd | None, hi_vnd | None, display_label)
+AmountRange = tuple  # (Optional[int], Optional[int], str)
+
+
+def parse_amount_search(s: str) -> Optional[AmountRange]:
+    """
+    Parse amount search into (lo_vnd, hi_vnd, label).
+    lo/hi are None for open-ended ranges.
+
+    Supported formats (amounts in thousands, e.g. 200 = 200k = 200.000đ):
+      '<200'   → (None, 199_000, '< 200k')
+      '>50'    → (51_000, None,  '> 50k')
+      '<=200'  → (None, 200_000, '≤ 200k')
+      '>=50'   → (50_000, None,  '≥ 50k')
+      '50-200' → (50_000, 200_000, '50k-200k')
+      '200'    → (200_000, 299_999, '200k-299k')  ← first-digit scale
+    """
+    s = s.strip()
+
+    # <= or >=
+    m = re.match(r'^([<>]=)\s*([\d,.\s]+)$', s)
+    if m:
+        op, n = m.group(1), _parse_num(m.group(2))
+        if n:
+            if op == '<=':
+                return None, n * 1000, f"≤ {_fmt_k(n)}"
+            else:
+                return n * 1000, None, f"≥ {_fmt_k(n)}"
+
+    # < or >
+    m = re.match(r'^([<>])\s*([\d,.\s]+)$', s)
+    if m:
+        op, n = m.group(1), _parse_num(m.group(2))
+        if n:
+            if op == '<':
+                return None, n * 1000 - 1, f"< {_fmt_k(n)}"
+            else:
+                return n * 1000 + 1, None, f"> {_fmt_k(n)}"
+
+    # x-y range  (avoid matching negative numbers)
+    m = re.match(r'^([\d,.\s]+)\s*[-–]\s*([\d,.\s]+)$', s)
+    if m:
+        lo_n, hi_n = _parse_num(m.group(1)), _parse_num(m.group(2))
+        if lo_n and hi_n:
+            if lo_n > hi_n:
+                lo_n, hi_n = hi_n, lo_n
+            return lo_n * 1000, hi_n * 1000, f"{_fmt_k(lo_n)}-{_fmt_k(hi_n)}"
+
+    # First-digit scale pattern: '200' → 200k-299k, '244' → 200k-299k
+    clean = re.sub(r"[,.\s]", "", s)
+    if clean.isdigit() and int(clean) > 0:
+        n = len(clean)
+        first = int(clean[0])
+        scale = 10 ** (n - 1)
+        lo = first * scale * 1000
+        hi = (first + 1) * scale * 1000 - 1
+        lo_k, hi_k = lo // 1000, hi // 1000
+        label = _fmt_k(lo_k) if lo_k == hi_k else f"{_fmt_k(lo_k)}-{_fmt_k(hi_k)}"
+        return lo, hi, label
+
+    return None
+
+
+def format_amount_range(lo: Optional[int], hi: Optional[int]) -> str:
+    """Format (lo_vnd, hi_vnd) → compact label. Handles None for open bounds."""
+    if lo is None and hi is not None:
+        return f"< {_fmt_k((hi + 1) // 1000)}"
+    if lo is not None and hi is None:
+        return f"> {_fmt_k((lo - 1) // 1000)}"
+    if lo is not None and hi is not None:
+        lo_k, hi_k = lo // 1000, hi // 1000
+        return f"{_fmt_k(lo_k)}-{_fmt_k(hi_k)}" if lo_k != hi_k else _fmt_k(lo_k)
+    return ""
 
 
 @dataclass

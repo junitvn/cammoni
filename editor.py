@@ -93,8 +93,7 @@ async def cmd_sua(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if raw:
         amt_range = parse_amount_search(raw)
         if amt_range:
-            amount_min, amount_max = amt_range
-            search_label = format_amount_range(amount_min, amount_max)
+            amount_min, amount_max, search_label = amt_range
         else:
             keyword = raw
             search_label = raw
