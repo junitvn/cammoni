@@ -287,11 +287,11 @@ async def _handle_batch_transactions(
     status_msg,
     items: list,
 ) -> None:
-    """Classify and save a list of parsed transactions; edit status_msg with summary."""
+    """Classify and save a list of parsed transactions; send one message per transaction."""
     uid = str(update.effective_user.id)
     uname = user_store.get_name(update.effective_user.id, update.effective_user.first_name or "")
-    lines = []
 
+    parsed = []
     for item in items:
         if isinstance(item, dict):
             amount = int(item.get("amount_k", 0)) * 1000
@@ -301,24 +301,45 @@ async def _handle_batch_transactions(
             amount = item.amount
             description = item.description
             tx_type = item.tx_type
+        if amount > 0 and description:
+            parsed.append((tx_type, amount, description))
 
-        if amount <= 0 or not description:
-            continue
+    if not parsed:
+        await status_msg.edit_text("❓ Không ghi được khoản nào.")
+        return
 
+    await status_msg.edit_text(f"📝 Đã ghi {len(parsed)} khoản:")
+
+    for tx_type, amount, description in parsed:
         cat_key, _ = await classify(description, amount, tx_type)
         cat_disp = category_display(cat_key)
         amt_str = format_amount(amount)
         tx_id = str(uuid.uuid4())[:8]
+        timestamp = now_vn()
 
-        icon = "💰" if tx_type == "thu" else "✅"
-        lines.append(f"{icon} {amt_str} — {cat_disp} \"{description}\"")
+        context.user_data[f"tx_desc_{tx_id}"] = description
+        context.user_data[f"tx_type_{tx_id}"] = tx_type
+        context.user_data[f"tx_ts_{tx_id}"] = timestamp
 
-        async def _save(u=uid, un=uname, tt=tx_type, a=amount, ck=cat_key, d=description, tid=tx_id):
+        name_tag = f" _({uname})_" if uname else ""
+        if tx_type == "thu":
+            text = f"💰 Thu nhập: {amt_str}{name_tag}\n{cat_disp} — \"{description}\""
+        else:
+            text = f"✅ Đã ghi: {amt_str}{name_tag}\n{cat_disp} — \"{description}\""
+
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✏️ Sửa phân loại", callback_data=f"fix_cat_{tx_id}"),
+            InlineKeyboardButton("📅 Sửa ngày", callback_data=f"fix_date_{tx_id}"),
+        ]])
+        await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+        async def _save(u=uid, un=uname, tt=tx_type, a=amount, ck=cat_key,
+                        d=description, ts=timestamp, tid=tx_id):
             try:
                 await add_transaction(
-                    user_id=u, tx_type=tt, amount=a,
-                    category=ck, description=d,
-                    auto_classified=True, tx_id=tid, user_name=un,
+                    user_id=u, tx_type=tt, amount=a, category=ck,
+                    description=d, auto_classified=True,
+                    timestamp=ts, tx_id=tid, user_name=un,
                 )
                 logger.info(f"[bot] saved batch tx_id={tid}")
                 if tt == "chi":
@@ -329,14 +350,6 @@ async def _handle_batch_transactions(
                 logger.exception(f"[bot] batch save FAILED: {e}")
 
         asyncio.create_task(_save())
-
-    if not lines:
-        await status_msg.edit_text("❓ Không ghi được khoản nào.")
-        return
-
-    summary = f"📝 Đã ghi {len(lines)} khoản:\n" + "\n".join(lines)
-    hint = "\n\n_Dùng /edit để sửa nếu cần._"
-    await status_msg.edit_text(summary + hint, parse_mode="Markdown")
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
