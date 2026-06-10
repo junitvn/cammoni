@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardButton, InlineKeyboardMarkup,
+    InlineKeyboardButton, InlineKeyboardMarkup, BotCommand,
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -62,6 +62,21 @@ def is_allowed(user_id: int) -> bool:
         return True  # no whitelist configured → allow all
     return user_id in ALLOWED_USERS
 
+
+# ── Bot commands (shown in Telegram's blue menu button) ──────────────────────
+
+BOT_COMMANDS = [
+    BotCommand("thang", "📅 Thống kê tháng này"),
+    BotCommand("tuan", "📅 Thống kê tuần này"),
+    BotCommand("homnay", "📅 Thống kê hôm nay"),
+    BotCommand("khoang", "📅 Thống kê khoảng thời gian"),
+    BotCommand("topthang", "🏆 Top chi tiêu tháng này"),
+    BotCommand("toptuan", "🏆 Top chi tiêu tuần này"),
+    BotCommand("ngansach", "💰 Quản lý ngân sách"),
+    BotCommand("sua", "✏️ Sửa hoặc xóa giao dịch"),
+    BotCommand("menu", "📊 Tất cả tùy chọn thống kê"),
+    BotCommand("start", "🏠 Khởi động bot"),
+]
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
 
@@ -118,6 +133,46 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update.effective_user.id):
         return
     await update.effective_message.reply_text("📊 Chọn thống kê:", reply_markup=MENU_KEYBOARD)
+
+
+async def cmd_thang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user.id):
+        return
+    await _send_stats(update, context, "month")
+
+async def cmd_tuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user.id):
+        return
+    await _send_stats(update, context, "week")
+
+async def cmd_homnay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user.id):
+        return
+    await _send_stats(update, context, "today")
+
+async def cmd_khoang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user.id):
+        return
+    context.user_data["waiting_custom_range"] = True
+    await update.message.reply_text(
+        "Nhập khoảng thời gian (VD: `01/06 - 09/06` hoặc `01/06/2025 - 09/06/2025`):",
+        parse_mode="Markdown",
+    )
+
+async def cmd_topthang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user.id):
+        return
+    await _send_top(update, context, "month")
+
+async def cmd_toptuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user.id):
+        return
+    await _send_top(update, context, "week")
+
+async def cmd_ngansach(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user.id):
+        return
+    await budget_menu(update, context)
 
 
 async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -443,6 +498,13 @@ def main() -> None:
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
+    app.add_handler(CommandHandler("thang", cmd_thang))
+    app.add_handler(CommandHandler("tuan", cmd_tuan))
+    app.add_handler(CommandHandler("homnay", cmd_homnay))
+    app.add_handler(CommandHandler("khoang", cmd_khoang))
+    app.add_handler(CommandHandler("topthang", cmd_topthang))
+    app.add_handler(CommandHandler("toptuan", cmd_toptuan))
+    app.add_handler(CommandHandler("ngansach", cmd_ngansach))
 
     # Conversation handlers (must be added before generic handlers)
     app.add_handler(get_editor_conversation_handler())
@@ -477,6 +539,12 @@ def main() -> None:
 
 async def _post_init(app) -> None:
     """Called after bot initializes but before polling starts."""
+    try:
+        await app.bot.set_my_commands(BOT_COMMANDS)
+        logger.info("[bot] bot commands registered")
+    except Exception as e:
+        logger.warning(f"set_my_commands failed: {e}")
+
     try:
         await init_sheets()
     except Exception as e:
