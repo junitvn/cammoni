@@ -54,6 +54,17 @@ def _load_allowed_users_from_env() -> set[int]:
     return set()
 
 
+def _load_allowed_users_from_yaml() -> set[int]:
+    try:
+        import yaml
+        with open("config/users.yaml") as f:
+            data = yaml.safe_load(f)
+        ids = data.get("allowed_users", []) if isinstance(data, dict) else []
+        return {int(x) for x in ids if str(x).strip()}
+    except Exception:
+        return set()
+
+
 ALLOWED_USERS: set[int] = _load_allowed_users_from_env()
 
 
@@ -651,8 +662,14 @@ async def _post_init(app) -> None:
     except Exception as e:
         logger.warning(f"load_categories failed (non-fatal): {e}")
 
-    # Load users from sheet only if ALLOWED_USERS env var is not set
+    # Load users from yaml or sheet only if ALLOWED_USERS env var is not set
     if not os.getenv("ALLOWED_USERS"):
+        yaml_users = _load_allowed_users_from_yaml()
+        if yaml_users:
+            ALLOWED_USERS.clear()
+            ALLOWED_USERS.update(yaml_users)
+            logger.info(f"[bot] loaded {len(yaml_users)} allowed users from config/users.yaml")
+    if not os.getenv("ALLOWED_USERS") and not ALLOWED_USERS:
         try:
             users = await load_users_from_sheet()
             if users:
