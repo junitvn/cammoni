@@ -4,8 +4,9 @@ Main bot entrypoint.
 import asyncio
 import logging
 import os
+import re
 import uuid
-from datetime import time as dtime
+from datetime import datetime, timedelta, time as dtime
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -25,8 +26,9 @@ from classifier import (
     INCOME_CATEGORY_KEYS, EXPENSE_CATEGORY_KEYS,
 )
 from sheets import (
-    add_transaction, update_transaction_field, now_vn, init_sheets,
+    add_transaction, update_transaction_field, now_vn, format_ts, init_sheets,
     upsert_config_mapping, load_categories_from_sheet, load_users_from_sheet,
+    TZ,
 )
 from stats import compute_stats, format_stats_text, check_budget_warning, format_top_text
 from charts import generate_charts
@@ -186,6 +188,17 @@ async def cmd_ngansach(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await budget_menu(update, context)
 
 
+def _resolve_timestamp(day: int, month: int | None) -> datetime:
+    """Build a datetime for a given day (and optional month), using current time."""
+    now = now_vn()
+    month = month or now.month
+    year = now.year
+    try:
+        return now.replace(day=day, month=month, year=year)
+    except ValueError:
+        return now
+
+
 async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle any text message that looks like a transaction."""
     if not is_allowed(update.effective_user.id):
@@ -198,6 +211,12 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     user_id = str(update.effective_user.id)
 
+    # Resolve timestamp (may include date from message prefix)
+    if result.date_day:
+        timestamp = _resolve_timestamp(result.date_day, result.date_month)
+    else:
+        timestamp = now_vn()
+
     # Classify
     cat_key, ai_used = await classify(result.description, result.amount, result.tx_type)
 
@@ -205,22 +224,20 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     amt_str = format_amount(result.amount)
     tx_id = str(uuid.uuid4())[:8]
 
-    # Store for later use in recat handler
+    # Store for later use in recat/date handlers
     context.user_data[f"tx_desc_{tx_id}"] = result.description
     context.user_data[f"tx_type_{tx_id}"] = result.tx_type
+    context.user_data[f"tx_ts_{tx_id}"] = timestamp
 
+    date_line = f"\n📅 {timestamp.day}/{timestamp.month}" if result.date_day else ""
     if result.tx_type == "thu":
-        reply_text = (
-            f"💰 Thu nhập: {amt_str}\n"
-            f"{cat_disp} — \"{result.description}\""
-        )
+        reply_text = f"💰 Thu nhập: {amt_str}\n{cat_disp} — \"{result.description}\"{date_line}"
     else:
-        reply_text = (
-            f"✅ Đã ghi: {amt_str}\n"
-            f"{cat_disp} — \"{result.description}\""
-        )
+        reply_text = f"✅ Đã ghi: {amt_str}\n{cat_disp} — \"{result.description}\"{date_line}"
+
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✏️ Sửa phân loại", callback_data=f"fix_cat_{tx_id}")
+        InlineKeyboardButton("✏️ Sửa phân loại", callback_data=f"fix_cat_{tx_id}"),
+        InlineKeyboardButton("📅 Sửa ngày", callback_data=f"fix_date_{tx_id}"),
     ]])
     await update.message.reply_text(reply_text, reply_markup=keyboard)
 
@@ -234,6 +251,7 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 category=cat_key,
                 description=result.description,
                 auto_classified=True,
+                timestamp=timestamp,
                 tx_id=tx_id,
             )
             logger.info(f"[bot] saved tx_id={tx_id}")
@@ -371,6 +389,101 @@ async def handle_recat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await query.edit_message_text(
         f"{first_line}\n{cat_disp} ✓ (đã cập nhật)",
     )
+
+
+# ── Date picker handlers ──────────────────────────────────────────────────────
+
+def _date_picker_keyboard(tx_id: str, center: datetime) -> InlineKeyboardMarkup:
+    """7-day date picker centered on `center`, plus manual entry."""
+    row1, row2 = [], []
+    for delta in range(-3, 4):
+        d = center + timedelta(days=delta)
+        label = f"✓{d.day}/{d.month}" if delta == 0 else f"{d.day}/{d.month}"
+        cb = f"setdate_{tx_id}_{d.day}_{d.month}_{d.year}"
+        (row1 if delta < 1 else row2).append(InlineKeyboardButton(label, callback_data=cb))
+    return InlineKeyboardMarkup([
+        row1,
+        row2,
+        [InlineKeyboardButton("✏️ Nhập ngày", callback_data=f"inputdate_{tx_id}")],
+    ])
+
+
+async def handle_fix_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    tx_id = query.data.replace("fix_date_", "")
+    center = context.user_data.get(f"tx_ts_{tx_id}", now_vn())
+    await query.edit_message_reply_markup(reply_markup=_date_picker_keyboard(tx_id, center))
+
+
+async def handle_setdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    # format: setdate_{tx_id}_{day}_{month}_{year}
+    parts = query.data.split("_")
+    tx_id, day, month, year = parts[1], int(parts[2]), int(parts[3]), int(parts[4])
+
+    ts = context.user_data.get(f"tx_ts_{tx_id}", now_vn())
+    try:
+        new_ts = ts.replace(day=day, month=month, year=year)
+    except ValueError:
+        await query.answer("Ngày không hợp lệ.", show_alert=True)
+        return
+
+    ok = await update_transaction_field(tx_id, "timestamp", format_ts(new_ts))
+    if ok:
+        context.user_data[f"tx_ts_{tx_id}"] = new_ts
+        old_text = query.message.text.split("\n")[0]
+        await query.edit_message_text(f"{old_text}\n📅 {day}/{month} ✓")
+    else:
+        await query.answer("Không tìm thấy khoản.", show_alert=True)
+
+
+async def handle_inputdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    tx_id = query.data.replace("inputdate_", "")
+    context.user_data["waiting_date_tx_id"] = tx_id
+    old_text = query.message.text
+    await query.edit_message_text(
+        f"{old_text}\n\n✏️ Nhập ngày (`15` hoặc `15/6` hoặc `15-6`):",
+        parse_mode="Markdown",
+    )
+
+
+async def handle_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    tx_id = context.user_data.pop("waiting_date_tx_id")
+    text = update.message.text.strip()
+
+    ts = context.user_data.get(f"tx_ts_{tx_id}", now_vn())
+
+    m = re.match(r'^(\d{1,2})[/\-](\d{1,2})$', text)
+    if m:
+        day, month = int(m.group(1)), int(m.group(2))
+    else:
+        m = re.match(r'^(\d{1,2})$', text)
+        if m:
+            day, month = int(m.group(1)), ts.month
+        else:
+            await update.message.reply_text(
+                "Không nhận ra. Nhập `15` hoặc `15/6`.", parse_mode="Markdown"
+            )
+            context.user_data["waiting_date_tx_id"] = tx_id
+            return
+
+    try:
+        new_ts = ts.replace(day=day, month=month)
+    except ValueError:
+        await update.message.reply_text("Ngày không hợp lệ.")
+        context.user_data["waiting_date_tx_id"] = tx_id
+        return
+
+    ok = await update_transaction_field(tx_id, "timestamp", format_ts(new_ts))
+    if ok:
+        context.user_data[f"tx_ts_{tx_id}"] = new_ts
+        await update.message.reply_text(f"✅ Đã đổi ngày: {day}/{month}")
+    else:
+        await update.message.reply_text("❌ Không tìm thấy khoản.")
 
 
 # ── Stats keyboard handlers ───────────────────────────────────────────────────
@@ -614,6 +727,9 @@ def main() -> None:
     # Inline callbacks
     app.add_handler(CallbackQueryHandler(handle_fix_category, pattern=r"^fix_cat_"))
     app.add_handler(CallbackQueryHandler(handle_recat, pattern=r"^recat_"))
+    app.add_handler(CallbackQueryHandler(handle_fix_date, pattern=r"^fix_date_"))
+    app.add_handler(CallbackQueryHandler(handle_setdate, pattern=r"^setdate_"))
+    app.add_handler(CallbackQueryHandler(handle_inputdate, pattern=r"^inputdate_"))
     app.add_handler(CallbackQueryHandler(handle_scope_toggle, pattern=r"^scope_toggle_"))
     app.add_handler(CallbackQueryHandler(handle_chart_callback, pattern=r"^chart_"))
     app.add_handler(CallbackQueryHandler(handle_menu_callback, pattern=r"^menu_"))
@@ -699,6 +815,10 @@ async def _combined_text_handler(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     STATS_BUTTONS = {"🗓 Tháng này", "🏆 Top tháng", "💰 Ngân sách"}
+
+    if context.user_data.get("waiting_date_tx_id"):
+        await handle_date_input(update, context)
+        return
 
     if text in STATS_BUTTONS or context.user_data.get("waiting_custom_range"):
         await handle_stats_keyboard(update, context)

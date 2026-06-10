@@ -17,6 +17,8 @@ class ParseResult:
     description: str
     tx_type: str         # "chi" or "thu"
     raw: str
+    date_day: Optional[int] = None    # day parsed from message prefix (1-31)
+    date_month: Optional[int] = None  # month parsed from message prefix (1-12)
 
 
 # Matches: optional prefix (. or +), then number (with optional dot separators), then description
@@ -28,32 +30,64 @@ _PATTERN = re.compile(
     re.UNICODE
 )
 
+# Date prefix: "15. " → day only; "15/6 " or "15-6 " → day and month
+_DATE_FULL = re.compile(r'^(\d{1,2})[/\-](\d{1,2})\s+(.+)$', re.DOTALL)
+_DATE_ONLY = re.compile(r'^(\d{1,2})\.\s+(.+)$', re.DOTALL)
+
 # Matches a number token (with optional income prefix)
 _NUM_TOKEN = re.compile(r'^([.+])?(\d+(?:[.,]\d+)*)$')
+
+
+def _extract_date_prefix(text: str) -> tuple[Optional[int], Optional[int], str]:
+    """Extract leading date prefix from message. Returns (day, month, remaining_text)."""
+    m = _DATE_FULL.match(text)
+    if m:
+        d, mo = int(m.group(1)), int(m.group(2))
+        if 1 <= d <= 31 and 1 <= mo <= 12:
+            return d, mo, m.group(3).strip()
+    m = _DATE_ONLY.match(text)
+    if m:
+        d = int(m.group(1))
+        if 1 <= d <= 31:
+            return d, None, m.group(2).strip()
+    return None, None, text
 
 
 def parse_message(text: str) -> Optional[ParseResult]:
     """Parse a single transaction. Returns ParseResult or None."""
     text = text.strip()
-    m = _PATTERN.match(text)
-    if not m:
-        return None
 
-    prefix, num_str, desc = m.group(1), m.group(2), m.group(3).strip()
+    day, month, body = _extract_date_prefix(text)
 
-    num_clean = re.sub(r'[.,]', '', num_str)
-    try:
-        number = int(num_clean)
-    except ValueError:
-        return None
+    m = _PATTERN.match(body)
+    if m:
+        prefix, num_str, desc = m.group(1), m.group(2), m.group(3).strip()
+        num_clean = re.sub(r'[.,]', '', num_str)
+        try:
+            number = int(num_clean)
+        except ValueError:
+            return None
+        if number <= 0:
+            return None
+        return ParseResult(
+            amount=number * 1000,
+            description=desc,
+            tx_type="thu" if prefix in (".", "+") else "chi",
+            raw=text,
+            date_day=day,
+            date_month=month,
+        )
 
-    if number <= 0:
-        return None
+    # With date prefix, also try desc-first format ("15. cơm 50")
+    if day is not None:
+        result = _parse_item(body)
+        if result:
+            result.raw = text
+            result.date_day = day
+            result.date_month = month
+            return result
 
-    amount = number * 1000
-    tx_type = "thu" if prefix in (".", "+") else "chi"
-
-    return ParseResult(amount=amount, description=desc, tx_type=tx_type, raw=text)
+    return None
 
 
 def _parse_item(text: str) -> Optional[ParseResult]:
