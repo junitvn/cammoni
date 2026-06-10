@@ -100,7 +100,7 @@ async def _show_budget_status(query_or_update) -> None:
 
     budgets = stats.get("budgets", {})
     if not budgets:
-        text = "Chưa đặt ngân sách nào. Dùng /ngansach để đặt."
+        text = "Chưa đặt ngân sách nào. Dùng /budget để đặt."
     else:
         lines = ["💰 *Tình hình ngân sách tháng này*\n"]
         for scope, b in budgets.items():
@@ -125,7 +125,7 @@ async def _show_budget_status(query_or_update) -> None:
 def get_budget_conversation_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
-            CommandHandler("ngansach", budget_menu),
+            CommandHandler("budget", budget_menu),
             CallbackQueryHandler(budget_callback, pattern="^budget_"),
         ],
         states={
@@ -136,5 +136,5 @@ def get_budget_conversation_handler() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, budget_receive_amount),
             ],
         },
-        fallbacks=[CommandHandler("ngansach", budget_menu)],
+        fallbacks=[CommandHandler("budget", budget_menu)],
     )

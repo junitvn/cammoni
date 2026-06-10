@@ -238,7 +238,7 @@ async def delete_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
 def get_editor_conversation_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
-            CommandHandler("sua", cmd_sua),
+            CommandHandler("edit", cmd_sua),
             MessageHandler(filters.Regex(r"^✏️ Sửa/Xóa$"), cmd_sua),
         ],
         states={
@@ -258,5 +258,5 @@ def get_editor_conversation_handler() -> ConversationHandler:
                 CallbackQueryHandler(delete_confirm_callback, pattern="^(confirm_delete|cancel_delete)")
             ],
         },
-        fallbacks=[CommandHandler("sua", cmd_sua)],
+        fallbacks=[CommandHandler("edit", cmd_sua)],
     )

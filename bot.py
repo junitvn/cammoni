@@ -66,16 +66,16 @@ def is_allowed(user_id: int) -> bool:
 # ── Bot commands (shown in Telegram's blue menu button) ──────────────────────
 
 BOT_COMMANDS = [
-    BotCommand("thang", "📅 Thống kê tháng này"),
-    BotCommand("tuan", "📅 Thống kê tuần này"),
-    BotCommand("homnay", "📅 Thống kê hôm nay"),
-    BotCommand("khoang", "📅 Thống kê khoảng thời gian"),
-    BotCommand("topthang", "🏆 Top chi tiêu tháng này"),
-    BotCommand("toptuan", "🏆 Top chi tiêu tuần này"),
-    BotCommand("ngansach", "💰 Quản lý ngân sách"),
-    BotCommand("sua", "✏️ Sửa hoặc xóa giao dịch"),
-    BotCommand("menu", "📊 Tất cả tùy chọn thống kê"),
-    BotCommand("start", "🏠 Khởi động bot"),
+    BotCommand("month", "Thống kê tháng này"),
+    BotCommand("week", "Thống kê tuần này"),
+    BotCommand("today", "Thống kê hôm nay"),
+    BotCommand("range", "Thống kê khoảng thời gian"),
+    BotCommand("topmonth", "Top chi tiêu tháng này"),
+    BotCommand("topweek", "Top chi tiêu tuần này"),
+    BotCommand("budget", "Quản lý ngân sách"),
+    BotCommand("edit", "Sửa hoặc xóa giao dịch"),
+    BotCommand("menu", "Tất cả tùy chọn thống kê"),
+    BotCommand("start", "Khởi động bot"),
 ]
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
@@ -498,13 +498,13 @@ def main() -> None:
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
-    app.add_handler(CommandHandler("thang", cmd_thang))
-    app.add_handler(CommandHandler("tuan", cmd_tuan))
-    app.add_handler(CommandHandler("homnay", cmd_homnay))
-    app.add_handler(CommandHandler("khoang", cmd_khoang))
-    app.add_handler(CommandHandler("topthang", cmd_topthang))
-    app.add_handler(CommandHandler("toptuan", cmd_toptuan))
-    app.add_handler(CommandHandler("ngansach", cmd_ngansach))
+    app.add_handler(CommandHandler("month", cmd_thang))
+    app.add_handler(CommandHandler("week", cmd_tuan))
+    app.add_handler(CommandHandler("today", cmd_homnay))
+    app.add_handler(CommandHandler("range", cmd_khoang))
+    app.add_handler(CommandHandler("topmonth", cmd_topthang))
+    app.add_handler(CommandHandler("topweek", cmd_toptuan))
+    app.add_handler(CommandHandler("budget", cmd_ngansach))
 
     # Conversation handlers (must be added before generic handlers)
     app.add_handler(get_editor_conversation_handler())
