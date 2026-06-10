@@ -18,6 +18,8 @@ import users as user_store
 
 logger = logging.getLogger(__name__)
 
+PAGE_SIZE = 10
+
 # Conversation states
 (
     EDIT_LIST,
@@ -44,22 +46,17 @@ def _transaction_line(row: dict) -> str:
     return f"{type_icon} {ts} · {amt} · {info['emoji']} {desc}{name_part}"
 
 
-async def cmd_sua(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    keyword = " ".join(context.args) if context.args else None
-    user_id = str(update.effective_user.id)
-
-    rows = await get_recent_transactions(limit=10, keyword=keyword)
-
-    if not rows:
-        await update.message.reply_text(
-            "Không tìm thấy khoản nào." + (" Thử từ khóa khác." if keyword else "")
-        )
-        return ConversationHandler.END
-
-    context.user_data["edit_rows"] = {str(r["id"]): r for r in rows}
+async def _send_edit_page(
+    send_target,
+    rows: list,
+    offset: int,
+) -> None:
+    page = rows[offset:offset + PAGE_SIZE]
+    total = len(rows)
+    shown = min(offset + PAGE_SIZE, total)
 
     keyboard = []
-    for row in rows:
+    for row in page:
         tx_id = str(row["id"])
         label = _transaction_line(row)
         keyboard.append([InlineKeyboardButton(label, callback_data="noop")])
@@ -68,11 +65,35 @@ async def cmd_sua(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             InlineKeyboardButton("🗑️ Xóa", callback_data=f"del_{tx_id}"),
         ])
 
-    await update.message.reply_text(
-        "📋 *Các khoản gần đây:*",
+    if shown < total:
+        keyboard.append([InlineKeyboardButton(
+            f"⬇️ Load thêm ({total - shown} còn lại)",
+            callback_data=f"editmore_{shown}",
+        )])
+
+    header = f"📋 *Các khoản gần đây:* ({shown}/{total})"
+    await send_target.reply_text(
+        header,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )
+
+
+async def cmd_sua(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    keyword = " ".join(context.args) if context.args else None
+
+    rows = await get_recent_transactions(limit=100, keyword=keyword)
+
+    if not rows:
+        await update.message.reply_text(
+            "Không tìm thấy khoản nào." + (" Thử từ khóa khác." if keyword else "")
+        )
+        return ConversationHandler.END
+
+    context.user_data["edit_rows"] = {str(r["id"]): r for r in rows}
+    context.user_data["edit_all_rows"] = rows
+
+    await _send_edit_page(update.message, rows, offset=0)
     return EDIT_LIST
 
 
@@ -80,6 +101,12 @@ async def edit_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     data = query.data
+
+    if data.startswith("editmore_"):
+        offset = int(data.replace("editmore_", ""))
+        rows = context.user_data.get("edit_all_rows", [])
+        await _send_edit_page(query.message, rows, offset)
+        return EDIT_LIST
 
     if data.startswith("edit_"):
         tx_id = data.replace("edit_", "")
@@ -246,7 +273,7 @@ def get_editor_conversation_handler() -> ConversationHandler:
         ],
         states={
             EDIT_LIST: [
-                CallbackQueryHandler(edit_list_callback, pattern="^(edit_|del_|noop)")
+                CallbackQueryHandler(edit_list_callback, pattern="^(edit_|del_|noop|editmore_)")
             ],
             EDIT_CHOOSE_FIELD: [
                 CallbackQueryHandler(edit_choose_field_callback, pattern="^field_")

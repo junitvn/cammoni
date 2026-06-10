@@ -588,9 +588,26 @@ async def _send_top(
         await msg.edit_text(f"❌ Lỗi: {e}")
 
 
-def _stats_keyboard(period: str, uid: int, current_scope: str, has_data: bool) -> InlineKeyboardMarkup:
-    scope_label = "👤 Chỉ tôi" if current_scope == "all" else "👨‍👩‍👧 Cả nhà"
-    rows = [[InlineKeyboardButton(scope_label, callback_data=f"scope_toggle_{period}_{uid}")]]
+_PAGE_SIZE = 10
+
+
+def _tx_list_line(row: dict) -> str:
+    ts = str(row.get("timestamp", ""))[:5]
+    icon = "💰" if str(row.get("type", "chi")) == "thu" else "💸"
+    try:
+        amt = format_amount(int(float(str(row.get("amount", 0)))))
+    except (ValueError, TypeError):
+        amt = "?"
+    cat = str(row.get("category", "khac"))
+    info = CATEGORY_INFO.get(cat, {"emoji": "📦"})
+    desc = str(row.get("description", ""))
+    name = user_store.get_name(row.get("user", ""))
+    name_part = f" _({name})_" if name else ""
+    return f"{icon} {ts} {amt} {info['emoji']} {desc}{name_part}"
+
+
+def _stats_keyboard(period: str, uid: int, has_data: bool) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("📋 Danh sách", callback_data=f"txlist_{uid}_0")]]
     if has_data:
         rows.append([InlineKeyboardButton("📊 Xem biểu đồ", callback_data=f"chart_{uid}")])
     return InlineKeyboardMarkup(rows)
@@ -603,15 +620,13 @@ async def _send_stats(
     custom_start=None,
     custom_end=None,
 ) -> None:
+    from stats import PERIODS
     uid = update.effective_user.id
-    scope_key = f"stats_scope_{uid}"
-    current_scope = context.user_data.get(scope_key, "all")
-    filter_uid = str(uid) if current_scope == "me" else None
 
     msg = await update.effective_message.reply_text("⏳ Đang tải...")
 
     try:
-        stats = await compute_stats(period, user_id=filter_uid, custom_start=custom_start, custom_end=custom_end)
+        stats = await compute_stats(period, custom_start=custom_start, custom_end=custom_end)
     except Exception as e:
         await msg.edit_text(f"❌ Lỗi: {e}")
         return
@@ -620,43 +635,52 @@ async def _send_stats(
     if has_data:
         context.user_data[f"chart_params_{uid}"] = {
             "period": period, "custom_start": custom_start,
-            "custom_end": custom_end, "filter_uid": filter_uid,
+            "custom_end": custom_end, "filter_uid": None,
         }
+        # Store rows for Danh sách view (newest first)
+        context.user_data[f"txlist_rows_{uid}"] = list(reversed(stats["transactions"]))
+        context.user_data[f"txlist_label_{uid}"] = PERIODS.get(period, "Khoảng")
 
     await msg.edit_text(
         format_stats_text(stats),
-        reply_markup=_stats_keyboard(period, uid, current_scope, has_data),
+        reply_markup=_stats_keyboard(period, uid, has_data),
         parse_mode="Markdown",
     )
 
 
-async def handle_scope_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_txlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    parts = query.data.split("_", 3)
-    period = parts[2]
-    uid = int(parts[3])
+    # format: txlist_{uid}_{offset}
+    parts = query.data.split("_")
+    uid, offset = int(parts[1]), int(parts[2])
 
-    scope_key = f"stats_scope_{uid}"
-    current = context.user_data.get(scope_key, "all")
-    new_scope = "me" if current == "all" else "all"
-    context.user_data[scope_key] = new_scope
+    rows = context.user_data.get(f"txlist_rows_{uid}", [])
+    label = context.user_data.get(f"txlist_label_{uid}", "Giao dịch")
+    total = len(rows)
 
-    filter_uid = str(uid) if new_scope == "me" else None
-    stats = await compute_stats(period, user_id=filter_uid)
+    if not rows:
+        await query.answer("Không có giao dịch nào.", show_alert=True)
+        return
 
-    has_data = stats["total_chi"] > 0 or stats["total_thu"] > 0
-    if has_data:
-        context.user_data[f"chart_params_{uid}"] = {
-            "period": period, "custom_start": None,
-            "custom_end": None, "filter_uid": filter_uid,
-        }
+    shown = min(offset + _PAGE_SIZE, total)
+    lines = [f"📋 *Danh sách — {label}* ({shown}/{total})\n"]
+    for row in rows[:shown]:
+        lines.append(_tx_list_line(row))
+    text = "\n".join(lines)
 
-    await query.edit_message_text(
-        format_stats_text(stats),
-        reply_markup=_stats_keyboard(period, uid, new_scope, has_data),
-        parse_mode="Markdown",
-    )
+    kb = []
+    if shown < total:
+        kb.append([InlineKeyboardButton(
+            f"⬇️ Load thêm ({total - shown} còn lại)",
+            callback_data=f"txlist_{uid}_{shown}",
+        )])
+
+    markup = InlineKeyboardMarkup(kb) if kb else None
+    if offset == 0:
+        await query.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+    else:
+        await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
 
 
 async def handle_chart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -746,7 +770,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_fix_date, pattern=r"^fix_date_"))
     app.add_handler(CallbackQueryHandler(handle_setdate, pattern=r"^setdate_"))
     app.add_handler(CallbackQueryHandler(handle_inputdate, pattern=r"^inputdate_"))
-    app.add_handler(CallbackQueryHandler(handle_scope_toggle, pattern=r"^scope_toggle_"))
+    app.add_handler(CallbackQueryHandler(handle_txlist, pattern=r"^txlist_"))
     app.add_handler(CallbackQueryHandler(handle_chart_callback, pattern=r"^chart_"))
     app.add_handler(CallbackQueryHandler(handle_menu_callback, pattern=r"^menu_"))
 
