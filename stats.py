@@ -125,8 +125,11 @@ def format_stats_text(stats: dict) -> str:
     lines.append(f"💸 Chi: {format_amount(stats['total_chi'])}")
     lines.append(f"💰 Thu: {format_amount(stats['total_thu'])}")
     so_du = stats["so_du"]
-    sign = "+" if so_du >= 0 else ""
-    lines.append(f"🏦 Số dư: {sign}{format_amount(abs(so_du))}")
+    if so_du >= 0:
+        so_du_str = f"+{format_amount(so_du)}"
+    else:
+        so_du_str = f"-{format_amount(abs(so_du))}"
+    lines.append(f"🏦 Số dư: {so_du_str}")
     lines.append("")
     lines.append("*Theo mục chi:*")
 
