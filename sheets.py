@@ -209,7 +209,7 @@ async def _append_values(range_: str, values: list[list]) -> None:
     r = await client.post(
         f"{SHEETS_BASE}/{sheet_id}/values/{range_}:append",
         headers=await _auth_headers(),
-        params={"valueInputOption": "USER_ENTERED", "insertDataOption": "INSERT_ROWS"},
+        params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
         json={"values": values},
     )
     r.raise_for_status()
@@ -221,7 +221,7 @@ async def _set_values(range_: str, values: list[list]) -> None:
     r = await client.put(
         f"{SHEETS_BASE}/{sheet_id}/values/{range_}",
         headers=await _auth_headers(),
-        params={"valueInputOption": "USER_ENTERED"},
+        params={"valueInputOption": "RAW"},
         json={"values": values},
     )
     r.raise_for_status()
@@ -269,8 +269,18 @@ def format_ts(dt: datetime) -> str:
     return dt.strftime("%d/%m/%Y %H:%M")
 
 
-def parse_ts(s: str) -> Optional[datetime]:
-    for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y", "%d/%m %H:%M", "%d/%m"):
+def parse_ts(s) -> Optional[datetime]:
+    if not isinstance(s, str) or not s.strip():
+        return None
+    s = s.strip()
+    for fmt in (
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y",
+        "%d/%m %H:%M:%S",
+        "%d/%m %H:%M",
+        "%d/%m",
+    ):
         try:
             dt = datetime.strptime(s, fmt)
             if "%Y" not in fmt:
