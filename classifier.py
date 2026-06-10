@@ -83,7 +83,7 @@ async def classify_gemini(description: str, amount: int) -> str:
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
         category_list = ", ".join(f'"{v["name"]}"' for v in _CATEGORIES.values())
         prompt = (
