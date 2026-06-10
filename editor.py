@@ -10,9 +10,9 @@ from telegram.ext import (
 
 from sheets import (
     get_recent_transactions, update_transaction_field,
-    delete_transaction, parse_ts, format_ts,
+    delete_transaction, parse_ts, format_ts, upsert_config_mapping,
 )
-from classifier import CATEGORY_INFO, CATEGORY_KEYS
+from classifier import CATEGORY_INFO, CATEGORY_KEYS, INCOME_CATEGORY_KEYS, EXPENSE_CATEGORY_KEYS
 from parser import format_amount
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 def _transaction_line(row: dict) -> str:
     ts = str(row.get("timestamp", ""))[:5]  # dd/mm
+    tx_type = str(row.get("type", "chi"))
+    type_icon = "💰" if tx_type == "thu" else "💸"
     try:
         amt = format_amount(int(float(str(row.get("amount", 0)))))
     except (ValueError, TypeError):
@@ -36,7 +38,7 @@ def _transaction_line(row: dict) -> str:
     cat = str(row.get("category", "khac"))
     info = CATEGORY_INFO.get(cat, {"emoji": "📦", "name": cat})
     desc = str(row.get("description", ""))
-    return f"{ts} {amt} {info['emoji']} {desc}"
+    return f"{type_icon} {ts} · {amt} · {info['emoji']} {desc}"
 
 
 async def cmd_sua(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -57,10 +59,10 @@ async def cmd_sua(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     for row in rows:
         tx_id = str(row["id"])
         label = _transaction_line(row)
+        keyboard.append([InlineKeyboardButton(label, callback_data="noop")])
         keyboard.append([
-            InlineKeyboardButton(label, callback_data=f"noop"),
-            InlineKeyboardButton("✏️", callback_data=f"edit_{tx_id}"),
-            InlineKeyboardButton("🗑", callback_data=f"del_{tx_id}"),
+            InlineKeyboardButton("✏️ Sửa", callback_data=f"edit_{tx_id}"),
+            InlineKeyboardButton("🗑️ Xóa", callback_data=f"del_{tx_id}"),
         ])
 
     await update.message.reply_text(
@@ -126,13 +128,16 @@ async def edit_choose_field_callback(update: Update, context: ContextTypes.DEFAU
     if field == "category":
         cur_cat = str(row.get("category", "khac"))
         cur_info = CATEGORY_INFO.get(cur_cat, {"emoji": "📦", "name": cur_cat})
+        tx_type = str(row.get("type", "chi"))
+        cat_keys = INCOME_CATEGORY_KEYS if tx_type == "thu" else EXPENSE_CATEGORY_KEYS
+        row_size = 2 if tx_type == "thu" else 3
         keyboard = []
         btn_row = []
-        for key in CATEGORY_KEYS:
+        for key in cat_keys:
             info = CATEGORY_INFO[key]
             label = f"✓ {info['emoji']} {info['name']}" if key == cur_cat else f"{info['emoji']} {info['name']}"
             btn_row.append(InlineKeyboardButton(label, callback_data=f"setcat_{key}"))
-            if len(btn_row) == 3:
+            if len(btn_row) == row_size:
                 keyboard.append(btn_row)
                 btn_row = []
         if btn_row:
@@ -198,10 +203,15 @@ async def edit_choose_category_callback(update: Update, context: ContextTypes.DE
     await query.answer()
     new_cat = query.data.replace("setcat_", "")
     tx_id = context.user_data.get("edit_tx_id")
+    row = context.user_data.get("edit_rows", {}).get(tx_id, {})
 
     ok = await update_transaction_field(tx_id, "category", new_cat)
     info = CATEGORY_INFO.get(new_cat, {"emoji": "📦", "name": new_cat})
     if ok:
+        desc = str(row.get("description", ""))
+        if desc:
+            import asyncio
+            asyncio.create_task(upsert_config_mapping(desc, new_cat))
         await query.edit_message_text(f"✅ Đã cập nhật: {info['emoji']} {info['name']}")
     else:
         await query.edit_message_text("❌ Không tìm thấy khoản để sửa.")

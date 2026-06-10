@@ -19,8 +19,14 @@ from telegram.ext import (
 )
 
 from parser import parse_message, format_amount
-from classifier import classify, category_display, CATEGORY_INFO, CATEGORY_KEYS
-from sheets import add_transaction, update_transaction_field, now_vn, init_sheets
+from classifier import (
+    classify, category_display, CATEGORY_INFO, CATEGORY_KEYS,
+    INCOME_CATEGORY_KEYS, EXPENSE_CATEGORY_KEYS,
+)
+from sheets import (
+    add_transaction, update_transaction_field, now_vn, init_sheets,
+    upsert_config_mapping,
+)
 from stats import compute_stats, format_stats_text, check_budget_warning
 from charts import generate_charts
 from editor import get_editor_conversation_handler
@@ -80,19 +86,18 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     is_persistent=True,
 )
 
-def make_category_keyboard(tx_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🍜 Ăn ngoài", callback_data=f"recat_{tx_id}_an_ngoai"),
-            InlineKeyboardButton("🛒 Đi chợ", callback_data=f"recat_{tx_id}_di_cho"),
-            InlineKeyboardButton("📌 Bắt buộc", callback_data=f"recat_{tx_id}_bat_buoc"),
-        ],
-        [
-            InlineKeyboardButton("🚗 Phương tiện", callback_data=f"recat_{tx_id}_phuong_tien"),
-            InlineKeyboardButton("📈 Đầu tư", callback_data=f"recat_{tx_id}_dau_tu"),
-            InlineKeyboardButton("📦 Khác", callback_data=f"recat_{tx_id}_khac"),
-        ],
-    ])
+def make_category_keyboard(tx_id: str, tx_type: str = "chi") -> InlineKeyboardMarkup:
+    keys = INCOME_CATEGORY_KEYS if tx_type == "thu" else EXPENSE_CATEGORY_KEYS
+    buttons = [
+        InlineKeyboardButton(
+            f"{CATEGORY_INFO[k]['emoji']} {CATEGORY_INFO[k]['name']}",
+            callback_data=f"recat_{tx_id}_{k}",
+        )
+        for k in keys
+    ]
+    row_size = 2 if tx_type == "thu" else 3
+    rows = [buttons[i:i + row_size] for i in range(0, len(buttons), row_size)]
+    return InlineKeyboardMarkup(rows)
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
@@ -130,18 +135,27 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     user_id = str(update.effective_user.id)
 
-    # Classify (fast — rule-based first)
-    cat_key, ai_used = await classify(result.description, result.amount)
+    # Classify
+    cat_key, ai_used = await classify(result.description, result.amount, result.tx_type)
 
     cat_disp = category_display(cat_key)
     amt_str = format_amount(result.amount)
     tx_id = str(uuid.uuid4())[:8]
 
-    # Reply to user immediately (optimistic)
-    reply_text = (
-        f"✅ Đã ghi: {amt_str}\n"
-        f"{cat_disp} — \"{result.description}\""
-    )
+    # Store for later use in recat handler
+    context.user_data[f"tx_desc_{tx_id}"] = result.description
+    context.user_data[f"tx_type_{tx_id}"] = result.tx_type
+
+    if result.tx_type == "thu":
+        reply_text = (
+            f"💰 Thu nhập: {amt_str}\n"
+            f"{cat_disp} — \"{result.description}\""
+        )
+    else:
+        reply_text = (
+            f"✅ Đã ghi: {amt_str}\n"
+            f"{cat_disp} — \"{result.description}\""
+        )
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✏️ Sửa phân loại", callback_data=f"fix_cat_{tx_id}")
     ]])
@@ -175,12 +189,11 @@ async def handle_fix_category(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Show category selection buttons when user taps 'Sửa phân loại'."""
     query = update.callback_query
     await query.answer()
-    data = query.data  # "fix_cat_{tx_id}"
-
-    tx_id = data.replace("fix_cat_", "")
+    tx_id = query.data.replace("fix_cat_", "")
     context.user_data["fix_cat_tx_id"] = tx_id
 
-    await query.edit_message_reply_markup(reply_markup=make_category_keyboard(tx_id))
+    tx_type = context.user_data.get(f"tx_type_{tx_id}", "chi")
+    await query.edit_message_reply_markup(reply_markup=make_category_keyboard(tx_id, tx_type))
 
 
 async def handle_recat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -194,9 +207,13 @@ async def handle_recat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     await update_transaction_field(tx_id, "category", cat_key)
 
+    # Save learned mapping to Config sheet
+    desc = context.user_data.get(f"tx_desc_{tx_id}", "")
+    if desc:
+        asyncio.create_task(upsert_config_mapping(desc, cat_key))
+
     cat_disp = category_display(cat_key)
     old_text = query.message.text
-    # Update message to reflect new category
     first_line = old_text.split("\n")[0]
     await query.edit_message_text(
         f"{first_line}\n{cat_disp} ✓ (đã cập nhật)",

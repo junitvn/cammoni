@@ -41,6 +41,7 @@ TRANSACTIONS_HEADER = [
     "category", "description", "auto_classified"
 ]
 BUDGET_HEADER = ["scope", "limit_vnd", "period"]
+CONFIG_HEADER = ["description", "category"]
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ _service_account_info: Optional[dict] = None
 _access_token: Optional[str] = None
 _token_expiry: float = 0.0
 _httpx_client: Optional[httpx.AsyncClient] = None
+_config_cache: Optional[dict] = None
 
 
 def _load_service_account() -> dict:
@@ -131,7 +133,7 @@ async def init_sheets() -> None:
 
     # Create missing sheets
     requests_body = []
-    for name in ("Transactions", "Budget"):
+    for name in ("Transactions", "Budget", "Config"):
         if name not in existing:
             requests_body.append({
                 "addSheet": {"properties": {"title": name, "gridProperties": {"rowCount": 1000, "columnCount": 20}}}
@@ -147,7 +149,11 @@ async def init_sheets() -> None:
         logger.info(f"[sheets] init_sheets: created missing sheets")
 
     # Ensure headers
-    for name, header in [("Transactions", TRANSACTIONS_HEADER), ("Budget", BUDGET_HEADER)]:
+    for name, header in [
+        ("Transactions", TRANSACTIONS_HEADER),
+        ("Budget", BUDGET_HEADER),
+        ("Config", CONFIG_HEADER),
+    ]:
         values = await _get_values(f"{name}!1:1")
         if not values or values[0] != header:
             await _set_values(f"{name}!A1", [header])
@@ -378,6 +384,41 @@ async def get_budgets() -> list[dict]:
     if not rows or rows[0] != BUDGET_HEADER:
         return []
     return [dict(zip(BUDGET_HEADER, _pad_row(r, 3))) for r in rows[1:]]
+
+
+async def get_config_mappings() -> dict[str, str]:
+    """Returns {description_lower: category_key} from Config sheet, with in-memory cache."""
+    global _config_cache
+    if _config_cache is not None:
+        return _config_cache
+    rows = await _get_values("Config!A:B")
+    if not rows or rows[0] != CONFIG_HEADER:
+        _config_cache = {}
+        return _config_cache
+    result = {}
+    for row in rows[1:]:
+        row = _pad_row(row, 2)
+        if row[0]:
+            result[row[0].lower().strip()] = row[1]
+    _config_cache = result
+    return _config_cache
+
+
+async def upsert_config_mapping(description: str, category: str) -> None:
+    """Save or update a description→category mapping in the Config sheet."""
+    global _config_cache
+    key = description.lower().strip()
+    rows = await _get_values("Config!A:B")
+    for i, row in enumerate(rows[1:], start=2):
+        row = _pad_row(row, 2)
+        if row[0].lower().strip() == key:
+            await _set_values(f"Config!A{i}:B{i}", [[description, category]])
+            if _config_cache is not None:
+                _config_cache[key] = category
+            return
+    await _append_values("Config!A:B", [[description, category]])
+    if _config_cache is not None:
+        _config_cache[key] = category
 
 
 async def set_budget(scope: str, limit_vnd: int, period: str = "month") -> None:

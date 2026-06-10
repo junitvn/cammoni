@@ -172,3 +172,23 @@ categories:
     name: "Chi tiêu khác"
     emoji: "📦"
     keywords: []
+
+  luong:
+    name: "Lương"
+    emoji: "💼"
+    income: true
+    keywords:
+      - lương
+      - salary
+      - thưởng
+      - bonus
+      - lương tháng
+      - lương tuần
+      - phụ cấp
+      - hoa hồng
+
+  thu_khac:
+    name: "Thu nhập khác"
+    emoji: "💵"
+    income: true
+    keywords: []

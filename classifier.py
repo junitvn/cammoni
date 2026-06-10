@@ -31,20 +31,33 @@ CATEGORY_INFO = {
 CATEGORY_KEYS = list(_CATEGORIES.keys())
 CATEGORY_NAMES = [v["name"] for v in _CATEGORIES.values()]
 
+INCOME_CATEGORY_KEYS = [k for k, v in _CATEGORIES.items() if v.get("income")]
+EXPENSE_CATEGORY_KEYS = [k for k, v in _CATEGORIES.items() if not v.get("income")]
+
 
 def classify_rule(description: str) -> Optional[str]:
     """
     Tier-1: return category key if a keyword matches, else None.
-    Checks all categories except 'khac' (catch-all).
+    Only checks expense categories.
     """
     desc_lower = description.lower()
-    for key, data in _CATEGORIES.items():
+    for key in EXPENSE_CATEGORY_KEYS:
         if key == "khac":
             continue
-        for kw in data.get("keywords", []):
+        for kw in _CATEGORIES[key].get("keywords", []):
             if kw.lower() in desc_lower:
                 return key
     return None
+
+
+def classify_income_rule(description: str) -> str:
+    """Return income category key based on keywords. Defaults to thu_khac."""
+    desc_lower = description.lower()
+    for key in INCOME_CATEGORY_KEYS:
+        for kw in _CATEGORIES[key].get("keywords", []):
+            if kw.lower() in desc_lower:
+                return key
+    return INCOME_CATEGORY_KEYS[-1] if INCOME_CATEGORY_KEYS else "thu_khac"
 
 
 # Simple in-memory cache for Gemini results keyed by normalized description
@@ -100,11 +113,24 @@ async def classify_gemini(description: str, amount: int) -> str:
         return "khac"
 
 
-async def classify(description: str, amount: int) -> tuple[str, bool]:
+async def classify(description: str, amount: int, tx_type: str = "chi") -> tuple[str, bool]:
     """
     Returns (category_key, ai_used).
-    Tier 1 → Tier 2 fallback.
+    For income: Config → income rule.
+    For expense: Config → rule-based → Gemini.
     """
+    from sheets import get_config_mappings
+    config = await get_config_mappings()
+    config_key = config.get(description.lower().strip())
+
+    if tx_type == "thu":
+        if config_key and config_key in INCOME_CATEGORY_KEYS:
+            return config_key, False
+        return classify_income_rule(description), False
+
+    if config_key and config_key in EXPENSE_CATEGORY_KEYS:
+        return config_key, False
+
     key = classify_rule(description)
     if key:
         return key, False
