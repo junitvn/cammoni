@@ -67,14 +67,21 @@ def is_allowed(user_id: int) -> bool:
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
-        [KeyboardButton("📊 Hôm nay"), KeyboardButton("📅 Tuần này")],
-        [KeyboardButton("🗓 Tháng này"), KeyboardButton("📆 Khoảng tg")],
-        [KeyboardButton("🏆 Top tuần"), KeyboardButton("🏆 Top tháng")],
+        [KeyboardButton("🗓 Tháng này"), KeyboardButton("🏆 Top tháng")],
         [KeyboardButton("💰 Ngân sách"), KeyboardButton("✏️ Sửa/Xóa")],
     ],
     resize_keyboard=True,
     is_persistent=True,
 )
+
+MENU_KEYBOARD = InlineKeyboardMarkup([
+    [InlineKeyboardButton("📊 Hôm nay", callback_data="menu_today"),
+     InlineKeyboardButton("📅 Tuần này", callback_data="menu_week")],
+    [InlineKeyboardButton("🗓 Tháng này", callback_data="menu_month"),
+     InlineKeyboardButton("📆 Khoảng tg", callback_data="menu_custom")],
+    [InlineKeyboardButton("🏆 Top tuần", callback_data="menu_topweek"),
+     InlineKeyboardButton("🏆 Top tháng", callback_data="menu_topmonth")],
+])
 
 def make_category_keyboard(tx_id: str, tx_type: str = "chi") -> InlineKeyboardMarkup:
     keys = INCOME_CATEGORY_KEYS if tx_type == "thu" else EXPENSE_CATEGORY_KEYS
@@ -110,7 +117,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update.effective_user.id):
         return
-    await update.message.reply_text("📊 Menu thống kê:", reply_markup=MAIN_KEYBOARD)
+    await update.effective_message.reply_text("📊 Chọn thống kê:", reply_markup=MENU_KEYBOARD)
 
 
 async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -217,23 +224,11 @@ async def handle_stats_keyboard(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     text = update.message.text.strip()
-    period_map = {
-        "📊 Hôm nay": "today",
-        "📅 Tuần này": "week",
-        "🗓 Tháng này": "month",
-    }
 
-    if text in period_map:
-        await _send_stats(update, context, period_map[text])
-    elif text in ("🏆 Top tuần", "🏆 Top tháng"):
-        period = "week" if text == "🏆 Top tuần" else "month"
-        await _send_top(update, context, period)
-    elif text == "📆 Khoảng tg":
-        context.user_data["waiting_custom_range"] = True
-        await update.message.reply_text(
-            "Nhập khoảng thời gian (VD: `01/06 - 09/06` hoặc `01/06/2025 - 09/06/2025`):",
-            parse_mode="Markdown",
-        )
+    if text == "🗓 Tháng này":
+        await _send_stats(update, context, "month")
+    elif text == "🏆 Top tháng":
+        await _send_top(update, context, "month")
     elif text == "💰 Ngân sách":
         await budget_menu(update, context)
     elif context.user_data.get("waiting_custom_range"):
@@ -267,6 +262,29 @@ async def _handle_custom_range(update: Update, context: ContextTypes.DEFAULT_TYP
     await _send_stats(update, context, "custom", custom_start=start, custom_end=end)
 
 
+async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    action = query.data
+
+    if action == "menu_today":
+        await _send_stats(update, context, "today")
+    elif action == "menu_week":
+        await _send_stats(update, context, "week")
+    elif action == "menu_month":
+        await _send_stats(update, context, "month")
+    elif action == "menu_topweek":
+        await _send_top(update, context, "week")
+    elif action == "menu_topmonth":
+        await _send_top(update, context, "month")
+    elif action == "menu_custom":
+        context.user_data["waiting_custom_range"] = True
+        await query.message.reply_text(
+            "Nhập khoảng thời gian (VD: `01/06 - 09/06` hoặc `01/06/2025 - 09/06/2025`):",
+            parse_mode="Markdown",
+        )
+
+
 async def _send_top(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -275,7 +293,7 @@ async def _send_top(
     from sheets import get_transactions_range
     from stats import _date_range
     period_label = "tuần này" if period == "week" else "tháng này"
-    msg = await update.message.reply_text("⏳ Đang tải...")
+    msg = await update.effective_message.reply_text("⏳ Đang tải...")
     try:
         start, end = _date_range(period)
         rows = await get_transactions_range(start, end)
@@ -285,56 +303,51 @@ async def _send_top(
         await msg.edit_text(f"❌ Lỗi: {e}")
 
 
+def _stats_keyboard(period: str, uid: int, current_scope: str, has_data: bool) -> InlineKeyboardMarkup:
+    scope_label = "👤 Chỉ tôi" if current_scope == "all" else "👨‍👩‍👧 Cả nhà"
+    rows = [[InlineKeyboardButton(scope_label, callback_data=f"scope_toggle_{period}_{uid}")]]
+    if has_data:
+        rows.append([InlineKeyboardButton("📊 Xem biểu đồ", callback_data=f"chart_{uid}")])
+    return InlineKeyboardMarkup(rows)
+
+
 async def _send_stats(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     period: str,
-    user_id_filter: str = None,
     custom_start=None,
     custom_end=None,
 ) -> None:
     uid = update.effective_user.id
     scope_key = f"stats_scope_{uid}"
-    current_scope = context.user_data.get(scope_key, "all")  # "all" or "me"
-
+    current_scope = context.user_data.get(scope_key, "all")
     filter_uid = str(uid) if current_scope == "me" else None
 
-    msg = await update.message.reply_text("⏳ Đang tải...")
+    msg = await update.effective_message.reply_text("⏳ Đang tải...")
 
     try:
-        stats = await compute_stats(
-            period,
-            user_id=filter_uid,
-            custom_start=custom_start,
-            custom_end=custom_end,
-        )
+        stats = await compute_stats(period, user_id=filter_uid, custom_start=custom_start, custom_end=custom_end)
     except Exception as e:
         await msg.edit_text(f"❌ Lỗi: {e}")
         return
 
-    text = format_stats_text(stats)
-    scope_label = "👤 Chỉ tôi" if current_scope == "all" else "👨‍👩‍👧 Cả nhà"
-    toggle_data = f"scope_toggle_{period}_{uid}"
+    has_data = stats["total_chi"] > 0 or stats["total_thu"] > 0
+    if has_data:
+        context.user_data[f"chart_params_{uid}"] = {
+            "period": period, "custom_start": custom_start,
+            "custom_end": custom_end, "filter_uid": filter_uid,
+        }
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(scope_label, callback_data=toggle_data)
-    ]])
-
-    await msg.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
-
-    # Send charts
-    try:
-        pie_bytes, bar_bytes = generate_charts(stats)
-        await update.message.reply_photo(pie_bytes, caption="Pie chart chi tiêu")
-        await update.message.reply_photo(bar_bytes, caption="Bar chart theo ngày")
-    except Exception as e:
-        logger.warning(f"Chart generation failed: {e}")
+    await msg.edit_text(
+        format_stats_text(stats),
+        reply_markup=_stats_keyboard(period, uid, current_scope, has_data),
+        parse_mode="Markdown",
+    )
 
 
 async def handle_scope_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    # scope_toggle_{period}_{uid}
     parts = query.data.split("_", 3)
     period = parts[2]
     uid = int(parts[3])
@@ -346,13 +359,44 @@ async def handle_scope_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     filter_uid = str(uid) if new_scope == "me" else None
     stats = await compute_stats(period, user_id=filter_uid)
-    text = format_stats_text(stats)
 
-    scope_label = "👤 Chỉ tôi" if new_scope == "all" else "👨‍👩‍👧 Cả nhà"
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(scope_label, callback_data=query.data)
-    ]])
-    await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    has_data = stats["total_chi"] > 0 or stats["total_thu"] > 0
+    if has_data:
+        context.user_data[f"chart_params_{uid}"] = {
+            "period": period, "custom_start": None,
+            "custom_end": None, "filter_uid": filter_uid,
+        }
+
+    await query.edit_message_text(
+        format_stats_text(stats),
+        reply_markup=_stats_keyboard(period, uid, new_scope, has_data),
+        parse_mode="Markdown",
+    )
+
+
+async def handle_chart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer("Đang tạo biểu đồ...")
+    uid = int(query.data.replace("chart_", ""))
+
+    params = context.user_data.get(f"chart_params_{uid}")
+    if not params:
+        await query.message.reply_text("❌ Hãy xem thống kê lại rồi bấm xem biểu đồ.")
+        return
+
+    try:
+        stats = await compute_stats(
+            params["period"],
+            user_id=params["filter_uid"],
+            custom_start=params.get("custom_start"),
+            custom_end=params.get("custom_end"),
+        )
+        pie_bytes, bar_bytes = generate_charts(stats)
+        await query.message.reply_photo(pie_bytes, caption="Chi tiêu theo danh mục")
+        await query.message.reply_photo(bar_bytes, caption="Chi tiêu theo ngày")
+    except Exception as e:
+        logger.warning(f"Chart generation failed: {e}")
+        await query.message.reply_text(f"❌ Lỗi tạo biểu đồ: {e}")
 
 
 # ── Daily reminder ─────────────────────────────────────────────────────────────
@@ -408,6 +452,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_fix_category, pattern=r"^fix_cat_"))
     app.add_handler(CallbackQueryHandler(handle_recat, pattern=r"^recat_"))
     app.add_handler(CallbackQueryHandler(handle_scope_toggle, pattern=r"^scope_toggle_"))
+    app.add_handler(CallbackQueryHandler(handle_chart_callback, pattern=r"^chart_"))
+    app.add_handler(CallbackQueryHandler(handle_menu_callback, pattern=r"^menu_"))
 
     # Stats keyboard + transaction input
     app.add_handler(MessageHandler(
@@ -474,7 +520,7 @@ async def _combined_text_handler(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning(f"Rejected user {uid} — not in whitelist {ALLOWED_USERS}")
         return
 
-    STATS_BUTTONS = {"📊 Hôm nay", "📅 Tuần này", "🗓 Tháng này", "📆 Khoảng tg", "💰 Ngân sách", "🏆 Top tuần", "🏆 Top tháng"}
+    STATS_BUTTONS = {"🗓 Tháng này", "🏆 Top tháng", "💰 Ngân sách"}
 
     if text in STATS_BUTTONS or context.user_data.get("waiting_custom_range"):
         await handle_stats_keyboard(update, context)
