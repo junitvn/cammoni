@@ -28,7 +28,7 @@ from sheets import (
     add_transaction, update_transaction_field, now_vn, init_sheets,
     upsert_config_mapping, load_categories_from_sheet, load_users_from_sheet,
 )
-from stats import compute_stats, format_stats_text, check_budget_warning
+from stats import compute_stats, format_stats_text, check_budget_warning, format_top_text
 from charts import generate_charts
 from editor import get_editor_conversation_handler
 from budget import get_budget_conversation_handler, budget_menu
@@ -69,6 +69,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📊 Hôm nay"), KeyboardButton("📅 Tuần này")],
         [KeyboardButton("🗓 Tháng này"), KeyboardButton("📆 Khoảng tg")],
+        [KeyboardButton("🏆 Top tuần"), KeyboardButton("🏆 Top tháng")],
         [KeyboardButton("💰 Ngân sách"), KeyboardButton("✏️ Sửa/Xóa")],
     ],
     resize_keyboard=True,
@@ -224,6 +225,9 @@ async def handle_stats_keyboard(update: Update, context: ContextTypes.DEFAULT_TY
 
     if text in period_map:
         await _send_stats(update, context, period_map[text])
+    elif text in ("🏆 Top tuần", "🏆 Top tháng"):
+        period = "week" if text == "🏆 Top tuần" else "month"
+        await _send_top(update, context, period)
     elif text == "📆 Khoảng tg":
         context.user_data["waiting_custom_range"] = True
         await update.message.reply_text(
@@ -261,6 +265,24 @@ async def _handle_custom_range(update: Update, context: ContextTypes.DEFAULT_TYP
 
     user_id = str(update.effective_user.id)
     await _send_stats(update, context, "custom", custom_start=start, custom_end=end)
+
+
+async def _send_top(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    period: str,
+) -> None:
+    from sheets import get_transactions_range
+    from stats import _date_range
+    period_label = "tuần này" if period == "week" else "tháng này"
+    msg = await update.message.reply_text("⏳ Đang tải...")
+    try:
+        start, end = _date_range(period)
+        rows = await get_transactions_range(start, end)
+        text = format_top_text(rows, period_label)
+        await msg.edit_text(text, parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Lỗi: {e}")
 
 
 async def _send_stats(
@@ -452,7 +474,7 @@ async def _combined_text_handler(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning(f"Rejected user {uid} — not in whitelist {ALLOWED_USERS}")
         return
 
-    STATS_BUTTONS = {"📊 Hôm nay", "📅 Tuần này", "🗓 Tháng này", "📆 Khoảng tg", "💰 Ngân sách"}
+    STATS_BUTTONS = {"📊 Hôm nay", "📅 Tuần này", "🗓 Tháng này", "📆 Khoảng tg", "💰 Ngân sách", "🏆 Top tuần", "🏆 Top tháng"}
 
     if text in STATS_BUTTONS or context.user_data.get("waiting_custom_range"):
         await handle_stats_keyboard(update, context)

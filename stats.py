@@ -118,6 +118,37 @@ async def compute_stats(
     }
 
 
+def format_top_text(rows: list, period_label: str, limit: int = 10) -> str:
+    expenses = []
+    for row in rows:
+        if str(row.get("type", "chi")) != "chi":
+            continue
+        try:
+            amt = int(row.get("amount", 0))
+        except (ValueError, TypeError):
+            amt = 0
+        if amt <= 0:
+            continue
+        expenses.append(row | {"_amt": amt})
+
+    expenses.sort(key=lambda r: r["_amt"], reverse=True)
+    top = expenses[:limit]
+
+    if not top:
+        return f"🏆 *Top chi tiêu {period_label}*\n\nChưa có khoản chi nào."
+
+    lines = [f"🏆 *Top chi tiêu {period_label}*\n"]
+    for i, row in enumerate(top, 1):
+        amt = row["_amt"]
+        cat = str(row.get("category", "khac"))
+        info = CATEGORY_INFO.get(cat, {"emoji": "📦", "name": cat})
+        desc = str(row.get("description", ""))
+        ts = str(row.get("timestamp", ""))[:5]  # dd/mm
+        lines.append(f"{i}. {info['emoji']} {format_amount(amt)} — {desc} _{ts}_")
+
+    return "\n".join(lines)
+
+
 def format_stats_text(stats: dict) -> str:
     lines = []
     period_label = PERIODS.get(stats["period"], "Khoảng thời gian")
