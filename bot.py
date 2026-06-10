@@ -267,6 +267,7 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 auto_classified=True,
                 timestamp=timestamp,
                 tx_id=tx_id,
+                user_name=display_name,
             )
             logger.info(f"[bot] saved tx_id={tx_id}")
             if result.tx_type == "chi":
@@ -288,6 +289,7 @@ async def _handle_batch_transactions(
 ) -> None:
     """Classify and save a list of parsed transactions; edit status_msg with summary."""
     uid = str(update.effective_user.id)
+    uname = user_store.get_name(update.effective_user.id, update.effective_user.first_name or "")
     lines = []
 
     for item in items:
@@ -311,12 +313,12 @@ async def _handle_batch_transactions(
         icon = "💰" if tx_type == "thu" else "✅"
         lines.append(f"{icon} {amt_str} — {cat_disp} \"{description}\"")
 
-        async def _save(u=uid, tt=tx_type, a=amount, ck=cat_key, d=description, tid=tx_id):
+        async def _save(u=uid, un=uname, tt=tx_type, a=amount, ck=cat_key, d=description, tid=tx_id):
             try:
                 await add_transaction(
                     user_id=u, tx_type=tt, amount=a,
                     category=ck, description=d,
-                    auto_classified=True, tx_id=tid,
+                    auto_classified=True, tx_id=tid, user_name=un,
                 )
                 logger.info(f"[bot] saved batch tx_id={tid}")
                 if tt == "chi":

@@ -35,10 +35,11 @@ COL_AMOUNT = 4
 COL_CATEGORY = 5
 COL_DESCRIPTION = 6
 COL_AUTO = 7
+COL_USER_NAME = 8
 
 TRANSACTIONS_HEADER = [
     "id", "timestamp", "user", "type", "amount",
-    "category", "description", "auto_classified"
+    "category", "description", "auto_classified", "user_name"
 ]
 BUDGET_HEADER = ["scope", "limit_vnd", "period"]
 CONFIG_HEADER = ["description", "category"]
@@ -177,7 +178,17 @@ async def init_sheets() -> None:
         ("Users", USERS_HEADER),
     ]:
         values = await _get_values(f"{name}!1:1")
-        if not values or values[0] != header:
+        existing = values[0] if values else []
+        if existing == header:
+            continue
+        # Migrate: if existing header is a prefix of the new header, only write missing columns
+        if existing and header[:len(existing)] == existing:
+            extra = header[len(existing):]
+            start_col = chr(ord('A') + len(existing))
+            end_col = chr(ord('A') + len(header) - 1)
+            await _set_values(f"{name}!{start_col}1:{end_col}1", [extra])
+            logger.info(f"[sheets] init_sheets: added columns {extra} to '{name}'")
+        else:
             await _set_values(f"{name}!A1", [header])
             logger.info(f"[sheets] init_sheets: wrote header for '{name}'")
 
@@ -302,6 +313,7 @@ async def add_transaction(
     auto_classified: bool,
     timestamp: Optional[datetime] = None,
     tx_id: Optional[str] = None,
+    user_name: str = "",
 ) -> str:
     if timestamp is None:
         timestamp = now_vn()
@@ -317,9 +329,10 @@ async def add_transaction(
         category,
         description,
         "Y" if auto_classified else "N",
+        user_name,
     ]
     logger.info(f"[sheets] add_transaction: writing tx_id={tx_id}")
-    await _append_values("Transactions!A:H", [row])
+    await _append_values("Transactions!A:I", [row])
     logger.info(f"[sheets] add_transaction: done tx_id={tx_id}")
     return tx_id
 
@@ -329,7 +342,7 @@ async def get_recent_transactions(
     limit: int = 10,
     keyword: Optional[str] = None,
 ) -> list[dict]:
-    rows = await _get_values("Transactions!A:H")
+    rows = await _get_values("Transactions!A:I")
     if not rows or rows[0] != TRANSACTIONS_HEADER:
         return []
 
@@ -348,7 +361,7 @@ async def get_recent_transactions(
 
 
 async def get_transaction_by_id(tx_id: str) -> Optional[tuple[int, dict]]:
-    rows = await _get_values("Transactions!A:H")
+    rows = await _get_values("Transactions!A:I")
     if not rows:
         return None
     for i, row in enumerate(rows[1:], start=2):
@@ -366,6 +379,7 @@ async def update_transaction_field(tx_id: str, field: str, value) -> bool:
         "category": COL_CATEGORY,
         "description": COL_DESCRIPTION,
         "auto_classified": COL_AUTO,
+        "user_name": COL_USER_NAME,
     }
     col = col_map.get(field)
     if col is None:
@@ -396,7 +410,7 @@ async def get_transactions_range(
     end: datetime,
     user_id: Optional[str] = None,
 ) -> list[dict]:
-    rows = await _get_values("Transactions!A:H")
+    rows = await _get_values("Transactions!A:I")
     if not rows or rows[0] != TRANSACTIONS_HEADER:
         return []
 
