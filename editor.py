@@ -13,7 +13,7 @@ from sheets import (
     delete_transaction, parse_ts, format_ts, upsert_config_mapping,
 )
 from classifier import CATEGORY_INFO, CATEGORY_KEYS, INCOME_CATEGORY_KEYS, EXPENSE_CATEGORY_KEYS
-from parser import format_amount
+from parser import format_amount, parse_amount_search, format_amount_range
 import users as user_store
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ async def _send_edit_page(
     send_target,
     rows: list,
     offset: int,
-    keyword: str = "",
+    search_label: str = "",
 ) -> None:
     page = rows[offset:offset + PAGE_SIZE]
     total = len(rows)
@@ -72,8 +72,8 @@ async def _send_edit_page(
             callback_data=f"editmore_{shown}",
         )])
 
-    if keyword:
-        header = f"🔍 *Kết quả \"{keyword}\":* ({shown}/{total})"
+    if search_label:
+        header = f"🔍 *\"{search_label}\":* ({shown}/{total})"
     else:
         header = f"📋 *Các khoản gần đây:* ({shown}/{total})"
 
@@ -85,24 +85,37 @@ async def _send_edit_page(
 
 
 async def cmd_sua(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    keyword = " ".join(context.args) if context.args else None
-    is_search = update.message.text.strip().startswith("/tim")
+    raw = " ".join(context.args).strip() if context.args else ""
+    keyword = None
+    amount_min = amount_max = None
+    search_label = ""
 
-    rows = await get_recent_transactions(limit=100, keyword=keyword)
+    if raw:
+        amt_range = parse_amount_search(raw)
+        if amt_range:
+            amount_min, amount_max = amt_range
+            search_label = format_amount_range(amount_min, amount_max)
+        else:
+            keyword = raw
+            search_label = raw
+
+    rows = await get_recent_transactions(
+        limit=100, keyword=keyword,
+        amount_min=amount_min, amount_max=amount_max,
+    )
 
     if not rows:
-        msg = "Không tìm thấy khoản nào."
-        if keyword:
-            msg += f" Không có kết quả cho \"{keyword}\"."
-        await update.message.reply_text(msg)
+        if search_label:
+            await update.message.reply_text(f"Không tìm thấy kết quả cho \"{search_label}\".")
+        else:
+            await update.message.reply_text("Không tìm thấy khoản nào.")
         return ConversationHandler.END
 
     context.user_data["edit_rows"] = {str(r["id"]): r for r in rows}
     context.user_data["edit_all_rows"] = rows
-    context.user_data["edit_is_search"] = is_search
-    context.user_data["edit_keyword"] = keyword or ""
+    context.user_data["edit_search_label"] = search_label
 
-    await _send_edit_page(update.message, rows, offset=0)
+    await _send_edit_page(update.message, rows, offset=0, search_label=search_label)
     return EDIT_LIST
 
 
@@ -114,8 +127,8 @@ async def edit_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if data.startswith("editmore_"):
         offset = int(data.replace("editmore_", ""))
         rows = context.user_data.get("edit_all_rows", [])
-        keyword = context.user_data.get("edit_keyword", "")
-        await _send_edit_page(query.message, rows, offset, keyword=keyword)
+        search_label = context.user_data.get("edit_search_label", "")
+        await _send_edit_page(query.message, rows, offset, search_label=search_label)
         return EDIT_LIST
 
     if data.startswith("edit_"):
@@ -279,7 +292,7 @@ def get_editor_conversation_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
             CommandHandler("edit", cmd_sua),
-            CommandHandler("tim", cmd_sua),
+            CommandHandler("search", cmd_sua),
             MessageHandler(filters.Regex(r"^✏️ Sửa/Xóa$"), cmd_sua),
         ],
         states={

@@ -19,6 +19,33 @@ def normalize_vn(text: str) -> str:
     return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
 
 
+def parse_amount_search(s: str) -> Optional[tuple[int, int]]:
+    """
+    Parse an amount search string into a VND range (lo, hi inclusive).
+    Rule: first digit sets the band, number of digits sets the scale.
+      '10'  → 10k-19k   (1x pattern)
+      '200' → 200k-299k (2xx)
+      '244' → 200k-299k (same scale as 200)
+      '50'  → 50k-59k
+    Returns None if the string is not a pure number or is zero.
+    """
+    clean = re.sub(r"[,.\s]", "", s.strip())
+    if not clean.isdigit() or int(clean) == 0:
+        return None
+    n = len(clean)
+    first = int(clean[0])
+    scale = 10 ** (n - 1)          # n=2→10, n=3→100, n=4→1000
+    lo = first * scale * 1000       # convert thousands → VND
+    hi = (first + 1) * scale * 1000 - 1
+    return lo, hi
+
+
+def format_amount_range(lo: int, hi: int) -> str:
+    """'10.000đ-19.000đ' compact label for display."""
+    lo_k, hi_k = lo // 1000, (hi + 1) // 1000 - 1
+    return f"{lo_k:,}k-{hi_k:,}k".replace(",", ".")
+
+
 @dataclass
 class ParseResult:
     amount: int          # amount in VND (already ×1000)

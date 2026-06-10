@@ -97,7 +97,7 @@ BOT_COMMANDS = [
     BotCommand("topweek", "Top chi tiêu tuần này"),
     BotCommand("budget", "Quản lý ngân sách"),
     BotCommand("edit", "Sửa hoặc xóa giao dịch"),
-    BotCommand("tim", "Tìm kiếm giao dịch theo từ khoá"),
+    BotCommand("search", "Tìm theo từ khoá hoặc khoảng tiền"),
     BotCommand("menu", "Tất cả tùy chọn thống kê"),
     BotCommand("start", "Khởi động bot"),
 ]

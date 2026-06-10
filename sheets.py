@@ -342,6 +342,8 @@ async def get_recent_transactions(
     user_id: Optional[str] = None,
     limit: int = 10,
     keyword: Optional[str] = None,
+    amount_min: Optional[int] = None,
+    amount_max: Optional[int] = None,
 ) -> list[dict]:
     rows = await _get_values("Transactions!A:I")
     if not rows or rows[0] != TRANSACTIONS_HEADER:
@@ -356,6 +358,15 @@ async def get_recent_transactions(
             continue
         if keyword and normalize_vn(keyword) not in normalize_vn(d.get("description", "")):
             continue
+        if amount_min is not None or amount_max is not None:
+            try:
+                amt = int(float(str(d.get("amount", 0))))
+            except (ValueError, TypeError):
+                amt = 0
+            if amount_min is not None and amt < amount_min:
+                continue
+            if amount_max is not None and amt > amount_max:
+                continue
         results.append(d)
 
     return results[-limit:][::-1]
