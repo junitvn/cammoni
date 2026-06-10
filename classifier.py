@@ -67,13 +67,10 @@ _gemini_cache: dict[str, str] = {}
 
 
 async def classify_gemini(description: str, amount: int) -> str:
-    """Tier-2: Gemini 2.0 Flash fallback. Returns 'khac' on any error."""
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
+    """Tier-2: Gemini fallback with model chain. Returns 'khac' on any error."""
+    if not os.getenv("GEMINI_API_KEY"):
         return "khac"
-
-    use_ai = os.getenv("USE_AI_FALLBACK", "true").lower()
-    if use_ai != "true":
+    if os.getenv("USE_AI_FALLBACK", "true").lower() != "true":
         return "khac"
 
     cache_key = description.strip().lower()
@@ -81,9 +78,7 @@ async def classify_gemini(description: str, amount: int) -> str:
         return _gemini_cache[cache_key]
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
+        from gemini_utils import generate_with_fallback
 
         category_list = ", ".join(f'"{v["name"]}"' for v in _CATEGORIES.values())
         prompt = (
@@ -92,7 +87,7 @@ async def classify_gemini(description: str, amount: int) -> str:
             f"Chỉ trả về tên mục, không giải thích thêm."
         )
 
-        response = model.generate_content(prompt)
+        response = await generate_with_fallback(prompt)
         name_returned = response.text.strip().strip('"').strip("'")
 
         for key, data in _CATEGORIES.items():

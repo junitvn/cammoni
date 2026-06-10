@@ -6,24 +6,11 @@ import asyncio
 import base64
 import json
 import logging
-import os
 import re
 
+from gemini_utils import generate_with_fallback
+
 logger = logging.getLogger(__name__)
-
-_model = None
-
-
-def _get_model():
-    global _model
-    if _model is None:
-        import google.generativeai as genai
-        api_key = os.getenv("GEMINI_API_KEY", "")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY not set")
-        genai.configure(api_key=api_key)
-        _model = genai.GenerativeModel("gemini-2.5-flash-lite")
-    return _model
 
 
 _PROMPT = """Đây là tin nhắn thoại tiếng Việt liên quan đến quản lý chi tiêu.
@@ -67,8 +54,6 @@ async def transcribe_voice(audio_bytes: bytes) -> dict:
       {"intent": "record", "transactions": [...]}
       {"intent": "search", "keyword": str|None, "amount_search": str|None}
     """
-    model = _get_model()
-
     part = {
         "inline_data": {
             "mime_type": "audio/ogg",
@@ -76,11 +61,7 @@ async def transcribe_voice(audio_bytes: bytes) -> dict:
         }
     }
 
-    loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(
-        None,
-        lambda: model.generate_content([part, _PROMPT]),
-    )
+    response = await generate_with_fallback([part, _PROMPT])
 
     raw = response.text.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
