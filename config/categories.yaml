@@ -1,0 +1,174 @@
+categories:
+  an_ngoai:
+    name: "Ăn ngoài"
+    emoji: "🍜"
+    keywords:
+      - cơm
+      - phở
+      - bún
+      - trà sữa
+      - cà phê
+      - cafe
+      - ăn
+      - quán
+      - nhậu
+      - ship đồ ăn
+      - giao đồ ăn
+      - shopeefood
+      - grabfood
+      - baemin
+      - pizza
+      - burger
+      - sushi
+      - lẩu
+      - bánh mì
+      - bánh
+      - nước
+      - trà
+      - bia
+      - nhà hàng
+      - fast food
+      - kfc
+      - mcdonalds
+      - highlands
+      - starbucks
+      - the coffee house
+      - gà
+      - vịt
+      - hải sản
+      - bò né
+      - hủ tiếu
+      - mì
+      - dimsum
+      - hotpot
+
+  di_cho:
+    name: "Đi chợ"
+    emoji: "🛒"
+    keywords:
+      - chợ
+      - rau
+      - thịt
+      - cá
+      - siêu thị
+      - bách hóa
+      - đồ ăn
+      - gạo
+      - vinmart
+      - winmart
+      - coopmart
+      - bigc
+      - lotte mart
+      - aeon
+      - go!
+      - tops market
+      - trứng
+      - sữa
+      - hoa quả
+      - trái cây
+      - mắm
+      - muối
+      - dầu ăn
+      - gia vị
+      - mì tôm
+      - đồ khô
+      - tạp hóa
+      - quầy
+      - mua đồ
+      - thực phẩm
+
+  bat_buoc:
+    name: "Chi tiêu bắt buộc"
+    emoji: "📌"
+    keywords:
+      - điện
+      - nước
+      - internet
+      - wifi
+      - tiền nhà
+      - thuê nhà
+      - học phí
+      - bảo hiểm
+      - thuế
+      - viện phí
+      - bệnh viện
+      - khám
+      - thuốc
+      - điện thoại
+      - phone
+      - sim
+      - phí
+      - hóa đơn
+      - bill
+      - trả góp
+      - vay
+      - nợ
+      - đóng tiền
+      - học
+      - trường
+      - gas
+
+  phuong_tien:
+    name: "Phương tiện đi lại"
+    emoji: "🚗"
+    keywords:
+      - grab
+      - xe
+      - xăng
+      - gửi xe
+      - taxi
+      - vé
+      - sửa xe
+      - bus
+      - xe bus
+      - tàu
+      - máy bay
+      - vé tàu
+      - vé máy bay
+      - uber
+      - be
+      - gojek
+      - xe ôm
+      - đỗ xe
+      - parking
+      - rửa xe
+      - bảo dưỡng xe
+      - thay nhớt
+      - lốp xe
+      - ắc quy
+      - đăng kiểm
+      - bằng lái
+      - phí cầu đường
+      - eto
+      - vinbus
+
+  dau_tu:
+    name: "Đầu tư"
+    emoji: "📈"
+    keywords:
+      - chứng khoán
+      - vàng
+      - cổ phiếu
+      - gửi tiết kiệm
+      - tiết kiệm
+      - crypto
+      - quỹ
+      - bitcoin
+      - eth
+      - usdt
+      - vnindex
+      - fpt
+      - vcb
+      - hpg
+      - stock
+      - invest
+      - đầu tư
+      - mở tài khoản
+      - nạp tiền đầu tư
+      - mua vàng
+      - tích lũy
+
+  khac:
+    name: "Chi tiêu khác"
+    emoji: "📦"
+    keywords: []

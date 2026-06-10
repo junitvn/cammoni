@@ -1,0 +1,7 @@
+python-telegram-bot[job-queue]==21.10
+gspread==6.1.2
+google-auth==2.29.0
+google-generativeai==0.8.3
+matplotlib==3.9.0
+PyYAML==6.0.2
+python-dotenv==1.0.1

@@ -1,0 +1,6 @@
+# Whitelist of allowed Telegram chat IDs
+# Add your family members' chat IDs here
+# Get your chat ID by messaging @userinfobot on Telegram
+allowed_users: ['1024403012']
+  # - 123456789   # Your name
+  # - 987654321   # Family member name
