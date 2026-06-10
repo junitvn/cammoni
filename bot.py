@@ -18,7 +18,7 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters,
 )
 
-from parser import parse_message, format_amount
+from parser import parse_message, parse_batch_message, format_amount
 import classifier
 from classifier import (
     classify, category_display, CATEGORY_INFO, CATEGORY_KEYS,
@@ -235,6 +235,96 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(f"⚠️ Lưu sheet thất bại: {e}")
 
     asyncio.create_task(_save())
+
+
+async def _handle_batch_transactions(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    status_msg,
+    items: list,
+) -> None:
+    """Classify and save a list of parsed transactions; edit status_msg with summary."""
+    uid = str(update.effective_user.id)
+    lines = []
+
+    for item in items:
+        if isinstance(item, dict):
+            amount = int(item.get("amount_k", 0)) * 1000
+            description = item.get("description", "")
+            tx_type = item.get("type", "chi")
+        else:
+            amount = item.amount
+            description = item.description
+            tx_type = item.tx_type
+
+        if amount <= 0 or not description:
+            continue
+
+        cat_key, _ = await classify(description, amount, tx_type)
+        cat_disp = category_display(cat_key)
+        amt_str = format_amount(amount)
+        tx_id = str(uuid.uuid4())[:8]
+
+        icon = "💰" if tx_type == "thu" else "✅"
+        lines.append(f"{icon} {amt_str} — {cat_disp} \"{description}\"")
+
+        async def _save(u=uid, tt=tx_type, a=amount, ck=cat_key, d=description, tid=tx_id):
+            try:
+                await add_transaction(
+                    user_id=u, tx_type=tt, amount=a,
+                    category=ck, description=d,
+                    auto_classified=True, tx_id=tid,
+                )
+                logger.info(f"[bot] saved batch tx_id={tid}")
+                if tt == "chi":
+                    warning = await check_budget_warning(ck, a)
+                    if warning:
+                        await update.effective_message.reply_text(warning)
+            except Exception as e:
+                logger.exception(f"[bot] batch save FAILED: {e}")
+
+        asyncio.create_task(_save())
+
+    if not lines:
+        await status_msg.edit_text("❓ Không ghi được khoản nào.")
+        return
+
+    summary = f"📝 Đã ghi {len(lines)} khoản:\n" + "\n".join(lines)
+    hint = "\n\n_Dùng /edit để sửa nếu cần._"
+    await status_msg.edit_text(summary + hint, parse_mode="Markdown")
+
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle voice messages: transcribe via Gemini and record transactions."""
+    if not is_allowed(update.effective_user.id):
+        return
+
+    msg = await update.message.reply_text("🎤 Đang nhận dạng giọng nói...")
+
+    try:
+        import io
+        from voice import transcribe_to_transactions
+
+        voice = update.message.voice
+        tg_file = await context.bot.get_file(voice.file_id)
+        buf = io.BytesIO()
+        await tg_file.download_to_memory(buf)
+        audio_bytes = buf.getvalue()
+
+        transactions = await transcribe_to_transactions(audio_bytes)
+
+        if not transactions:
+            await msg.edit_text(
+                "❓ Không nhận ra khoản thu/chi nào.\n"
+                "Thử nói rõ hơn, ví dụ: \"ba mươi cơm, năm mươi cháo\"."
+            )
+            return
+
+        await _handle_batch_transactions(update, context, msg, transactions)
+
+    except Exception as e:
+        logger.exception(f"Voice handling failed: {e}")
+        await msg.edit_text(f"❌ Lỗi xử lý giọng nói: {e}")
 
 
 async def handle_fix_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -523,6 +613,9 @@ def main() -> None:
         _combined_text_handler,
     ))
 
+    # Voice message transcription
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+
     # Daily reminder at 10:00 Asia/Ho_Chi_Minh
     job_queue = app.job_queue
     if job_queue:
@@ -592,16 +685,29 @@ async def _combined_text_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if text in STATS_BUTTONS or context.user_data.get("waiting_custom_range"):
         await handle_stats_keyboard(update, context)
-    else:
-        result = parse_message(text)
-        logger.info(f"Parse result: {result}")
-        if result is None:
-            await update.message.reply_text(
-                "❓ Không hiểu. Thử: `39 cơm trưa` (chi) hoặc `.500 lương` (thu)",
-                parse_mode="Markdown",
-            )
-            return
+        return
+
+    # Single transaction
+    result = parse_message(text)
+    if result:
+        logger.info(f"Parse result (single): {result}")
         await handle_transaction(update, context)
+        return
+
+    # Batch transactions
+    batch = parse_batch_message(text)
+    if batch:
+        logger.info(f"Parse result (batch): {len(batch)} items")
+        msg = await update.message.reply_text("⏳ Đang ghi...")
+        await _handle_batch_transactions(update, context, msg, batch)
+        return
+
+    await update.message.reply_text(
+        "❓ Không hiểu. Thử:\n"
+        "• `39 cơm trưa` — ghi 1 khoản\n"
+        "• `40 cơm, 50 cháo, 12 gửi xe` — ghi nhiều khoản",
+        parse_mode="Markdown",
+    )
 
 
 if __name__ == "__main__":

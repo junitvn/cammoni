@@ -28,11 +28,12 @@ _PATTERN = re.compile(
     re.UNICODE
 )
 
+# Matches a number token (with optional income prefix)
+_NUM_TOKEN = re.compile(r'^([.+])?(\d+(?:[.,]\d+)*)$')
+
 
 def parse_message(text: str) -> Optional[ParseResult]:
-    """
-    Parse a user message. Returns ParseResult or None if not a transaction.
-    """
+    """Parse a single transaction. Returns ParseResult or None."""
     text = text.strip()
     m = _PATTERN.match(text)
     if not m:
@@ -40,8 +41,6 @@ def parse_message(text: str) -> Optional[ParseResult]:
 
     prefix, num_str, desc = m.group(1), m.group(2), m.group(3).strip()
 
-    # Normalize number: remove dots/commas used as thousands separators
-    # e.g. "1.500" → "1500", "1,500" → "1500"
     num_clean = re.sub(r'[.,]', '', num_str)
     try:
         number = int(num_clean)
@@ -51,15 +50,111 @@ def parse_message(text: str) -> Optional[ParseResult]:
     if number <= 0:
         return None
 
-    amount = number * 1000  # always ×1000
+    amount = number * 1000
     tx_type = "thu" if prefix in (".", "+") else "chi"
 
+    return ParseResult(amount=amount, description=desc, tx_type=tx_type, raw=text)
+
+
+def _parse_item(text: str) -> Optional[ParseResult]:
+    """Parse one item in either 'num desc' or 'desc num' format."""
+    text = text.strip()
+    if not text:
+        return None
+    r = parse_message(text)
+    if r:
+        return r
+    # Try desc-first: "cơm 40" or "gửi xe 12"
+    m = re.match(r'^([.+])?(.+?)\s+([.+])?(\d+(?:[.,]\d+)*)$', text)
+    if m:
+        prefix = m.group(1) or m.group(3)
+        desc = m.group(2).strip()
+        num_clean = re.sub(r'[.,]', '', m.group(4))
+        try:
+            number = int(num_clean)
+            if number > 0 and desc:
+                return ParseResult(
+                    amount=number * 1000,
+                    description=desc,
+                    tx_type="thu" if prefix in (".", "+") else "chi",
+                    raw=text,
+                )
+        except ValueError:
+            pass
+    return None
+
+
+def _make_result(num_token: str, desc: str, raw: str) -> Optional[ParseResult]:
+    m = _NUM_TOKEN.match(num_token)
+    if not m:
+        return None
+    prefix, num_str = m.group(1), m.group(2)
+    num_clean = re.sub(r'[.,]', '', num_str)
+    try:
+        number = int(num_clean)
+    except ValueError:
+        return None
+    if number <= 0 or not desc.strip():
+        return None
     return ParseResult(
-        amount=amount,
-        description=desc,
-        tx_type=tx_type,
-        raw=text,
+        amount=number * 1000,
+        description=desc.strip(),
+        tx_type="thu" if prefix in (".", "+") else "chi",
+        raw=raw,
     )
+
+
+def _parse_space_separated(text: str) -> list[ParseResult]:
+    """Parse 'cơm 40 cháo 50 gửi xe 12' or '40 cơm 50 cháo 12 gửi xe'."""
+    tokens = text.split()
+    if len(tokens) < 4:
+        return []
+
+    num_pos = [i for i, t in enumerate(tokens) if _NUM_TOKEN.match(t)]
+    if len(num_pos) < 2:
+        return []
+
+    results = []
+
+    if num_pos[0] == 0:
+        # Number-first: 40 cơm 50 cháo 12 gửi xe
+        for j, ni in enumerate(num_pos):
+            next_ni = num_pos[j + 1] if j + 1 < len(num_pos) else len(tokens)
+            desc = " ".join(tokens[ni + 1:next_ni])
+            r = _make_result(tokens[ni], desc, text)
+            if r:
+                results.append(r)
+    else:
+        # Desc-first: cơm 40 cháo 50 gửi xe 12
+        prev_ni = -1
+        for ni in num_pos:
+            desc = " ".join(tokens[prev_ni + 1:ni])
+            r = _make_result(tokens[ni], desc, text)
+            if r:
+                results.append(r)
+            prev_ni = ni
+
+    return results if len(results) >= 2 else []
+
+
+def parse_batch_message(text: str) -> list[ParseResult]:
+    """
+    Parse multiple transactions from one message.
+    Returns list of ParseResult (empty if fewer than 2 items found).
+    Supports: '40 cơm, 50 cháo', 'cơm 40, cháo 50', 'cơm 40 cháo 50 gửi xe 12'
+    """
+    text = text.strip()
+    if not text:
+        return []
+
+    if "," in text:
+        parts = [p.strip() for p in text.split(",") if p.strip()]
+        if len(parts) >= 2:
+            results = [r for p in parts if (r := _parse_item(p))]
+            if len(results) >= 2:
+                return results
+
+    return _parse_space_separated(text)
 
 
 def format_amount(amount: int) -> str:
