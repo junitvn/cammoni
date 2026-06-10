@@ -42,6 +42,26 @@ TRANSACTIONS_HEADER = [
 ]
 BUDGET_HEADER = ["scope", "limit_vnd", "period"]
 CONFIG_HEADER = ["description", "category"]
+CATEGORIES_HEADER = ["key", "name", "emoji", "income", "keywords"]
+USERS_HEADER = ["user_id", "name"]
+
+# Default categories seeded on first run
+_CATEGORIES_SEED = [
+    ["an_ngoai", "Ăn ngoài", "🍜", "",
+     "cơm, phở, bún, trà sữa, cà phê, cafe, ăn, quán, nhậu, ship đồ ăn, giao đồ ăn, shopeefood, grabfood, baemin, pizza, burger, sushi, lẩu, bánh mì, bánh, nước, trà, bia, nhà hàng, fast food, kfc, mcdonalds, highlands, starbucks, the coffee house, gà, vịt, hải sản, bò né, hủ tiếu, mì, dimsum, hotpot"],
+    ["di_cho", "Đi chợ", "🛒", "",
+     "chợ, rau, thịt, cá, siêu thị, bách hóa, đồ ăn, gạo, vinmart, winmart, coopmart, bigc, lotte mart, aeon, go!, tops market, trứng, sữa, hoa quả, trái cây, mắm, muối, dầu ăn, gia vị, mì tôm, đồ khô, tạp hóa, quầy, mua đồ, thực phẩm"],
+    ["bat_buoc", "Chi tiêu bắt buộc", "📌", "",
+     "điện, nước, internet, wifi, tiền nhà, thuê nhà, học phí, bảo hiểm, thuế, viện phí, bệnh viện, khám, thuốc, điện thoại, phone, sim, phí, hóa đơn, bill, trả góp, vay, nợ, đóng tiền, học, trường, gas"],
+    ["phuong_tien", "Phương tiện đi lại", "🚗", "",
+     "grab, xe, xăng, gửi xe, taxi, vé, sửa xe, bus, xe bus, tàu, máy bay, vé tàu, vé máy bay, uber, be, gojek, xe ôm, đỗ xe, parking, rửa xe, bảo dưỡng xe, thay nhớt, lốp xe, ắc quy, đăng kiểm, bằng lái, phí cầu đường, eto, vinbus"],
+    ["dau_tu", "Đầu tư", "📈", "",
+     "chứng khoán, vàng, cổ phiếu, gửi tiết kiệm, tiết kiệm, crypto, quỹ, bitcoin, eth, usdt, vnindex, fpt, vcb, hpg, stock, invest, đầu tư, mở tài khoản, nạp tiền đầu tư, mua vàng, tích lũy"],
+    ["khac", "Chi tiêu khác", "📦", "", ""],
+    ["luong", "Lương", "💼", "yes",
+     "lương, salary, thưởng, bonus, lương tháng, lương tuần, phụ cấp, hoa hồng"],
+    ["thu_khac", "Thu nhập khác", "💵", "yes", ""],
+]
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -133,7 +153,7 @@ async def init_sheets() -> None:
 
     # Create missing sheets
     requests_body = []
-    for name in ("Transactions", "Budget", "Config"):
+    for name in ("Transactions", "Budget", "Config", "Categories", "Users"):
         if name not in existing:
             requests_body.append({
                 "addSheet": {"properties": {"title": name, "gridProperties": {"rowCount": 1000, "columnCount": 20}}}
@@ -153,11 +173,19 @@ async def init_sheets() -> None:
         ("Transactions", TRANSACTIONS_HEADER),
         ("Budget", BUDGET_HEADER),
         ("Config", CONFIG_HEADER),
+        ("Categories", CATEGORIES_HEADER),
+        ("Users", USERS_HEADER),
     ]:
         values = await _get_values(f"{name}!1:1")
         if not values or values[0] != header:
             await _set_values(f"{name}!A1", [header])
             logger.info(f"[sheets] init_sheets: wrote header for '{name}'")
+
+    # Seed Categories if empty
+    cat_rows = await _get_values("Categories!A:E")
+    if len(cat_rows) <= 1:
+        await _append_values("Categories!A:E", _CATEGORIES_SEED)
+        logger.info("[sheets] init_sheets: seeded Categories")
 
     logger.info("[sheets] init_sheets: done")
 
@@ -384,6 +412,44 @@ async def get_budgets() -> list[dict]:
     if not rows or rows[0] != BUDGET_HEADER:
         return []
     return [dict(zip(BUDGET_HEADER, _pad_row(r, 3))) for r in rows[1:]]
+
+
+async def load_categories_from_sheet() -> dict:
+    """Load categories from the Categories sheet. Returns dict keyed by category key."""
+    rows = await _get_values("Categories!A:E")
+    if not rows or rows[0] != CATEGORIES_HEADER:
+        return {}
+    result = {}
+    for row in rows[1:]:
+        row = _pad_row(row, 5)
+        key, name, emoji, income_flag, keywords_raw = row
+        if not key:
+            continue
+        keywords = [kw.strip() for kw in keywords_raw.split(",") if kw.strip()] if keywords_raw else []
+        result[key] = {
+            "name": name,
+            "emoji": emoji,
+            "keywords": keywords,
+            "income": income_flag.lower() in ("yes", "true", "1"),
+        }
+    logger.info(f"[sheets] loaded {len(result)} categories from sheet")
+    return result
+
+
+async def load_users_from_sheet() -> set[int]:
+    """Load allowed user IDs from the Users sheet."""
+    rows = await _get_values("Users!A:B")
+    if not rows or rows[0] != USERS_HEADER:
+        return set()
+    result = set()
+    for row in rows[1:]:
+        row = _pad_row(row, 2)
+        try:
+            result.add(int(row[0]))
+        except (ValueError, TypeError):
+            pass
+    logger.info(f"[sheets] loaded {len(result)} users from sheet")
+    return result
 
 
 async def get_config_mappings() -> dict[str, str]:

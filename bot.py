@@ -19,13 +19,14 @@ from telegram.ext import (
 )
 
 from parser import parse_message, format_amount
+import classifier
 from classifier import (
     classify, category_display, CATEGORY_INFO, CATEGORY_KEYS,
     INCOME_CATEGORY_KEYS, EXPENSE_CATEGORY_KEYS,
 )
 from sheets import (
     add_transaction, update_transaction_field, now_vn, init_sheets,
-    upsert_config_mapping,
+    upsert_config_mapping, load_categories_from_sheet, load_users_from_sheet,
 )
 from stats import compute_stats, format_stats_text, check_budget_warning
 from charts import generate_charts
@@ -43,29 +44,17 @@ TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 # ── Whitelist ─────────────────────────────────────────────────────────────────
 
-def _load_allowed_users() -> set[int]:
-    # From env (comma-separated)
+def _load_allowed_users_from_env() -> set[int]:
     env_ids = os.getenv("ALLOWED_USERS", "")
     if env_ids:
         try:
             return {int(x.strip()) for x in env_ids.split(",") if x.strip()}
         except ValueError:
             pass
-
-    # From users.yaml
-    try:
-        import yaml
-        from pathlib import Path
-        cfg = yaml.safe_load(
-            (Path(__file__).parent / "config" / "users.yaml").read_text()
-        )
-        ids = cfg.get("allowed_users") or []
-        return set(ids)
-    except Exception:
-        return set()
+    return set()
 
 
-ALLOWED_USERS: set[int] = _load_allowed_users()
+ALLOWED_USERS: set[int] = _load_allowed_users_from_env()
 
 
 def is_allowed(user_id: int) -> bool:
@@ -424,6 +413,25 @@ async def _post_init(app) -> None:
         await init_sheets()
     except Exception as e:
         logger.warning(f"init_sheets failed (non-fatal): {e}")
+        return
+
+    try:
+        cats = await load_categories_from_sheet()
+        if cats:
+            classifier.reload_categories(cats)
+    except Exception as e:
+        logger.warning(f"load_categories failed (non-fatal): {e}")
+
+    # Load users from sheet only if ALLOWED_USERS env var is not set
+    if not os.getenv("ALLOWED_USERS"):
+        try:
+            users = await load_users_from_sheet()
+            if users:
+                ALLOWED_USERS.clear()
+                ALLOWED_USERS.update(users)
+                logger.info(f"[bot] loaded {len(users)} allowed users from sheet")
+        except Exception as e:
+            logger.warning(f"load_users failed (non-fatal): {e}")
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

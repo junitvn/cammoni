@@ -1,60 +1,62 @@
 """
 2-tier classifier:
+  Tier 0: Config sheet learned mappings (highest priority)
   Tier 1: rule-based keyword matching (free, instant)
   Tier 2: Gemini 2.0 Flash fallback for ambiguous descriptions
+
+Categories are loaded from Google Sheets at startup via reload_categories().
 """
 import os
 import logging
-from functools import lru_cache
-from pathlib import Path
 from typing import Optional
-
-import yaml
 
 logger = logging.getLogger(__name__)
 
-CATEGORIES_FILE = Path(__file__).parent / "config" / "categories.yaml"
+# Module-level mutable globals — populated by reload_categories() at startup.
+# All modules that import these names hold references to the same objects,
+# so in-place mutations here are visible everywhere.
+_CATEGORIES: dict = {}
+CATEGORY_INFO: dict = {}
+CATEGORY_KEYS: list = []
+CATEGORY_NAMES: list = []
+INCOME_CATEGORY_KEYS: list = []
+EXPENSE_CATEGORY_KEYS: list = []
 
 
-def _load_categories() -> dict:
-    with open(CATEGORIES_FILE, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)["categories"]
-
-
-_CATEGORIES = _load_categories()
-
-# Category key → display info
-CATEGORY_INFO = {
-    key: {"name": v["name"], "emoji": v["emoji"]}
-    for key, v in _CATEGORIES.items()
-}
-CATEGORY_KEYS = list(_CATEGORIES.keys())
-CATEGORY_NAMES = [v["name"] for v in _CATEGORIES.values()]
-
-INCOME_CATEGORY_KEYS = [k for k, v in _CATEGORIES.items() if v.get("income")]
-EXPENSE_CATEGORY_KEYS = [k for k, v in _CATEGORIES.items() if not v.get("income")]
+def reload_categories(data: dict) -> None:
+    """Populate module globals from a categories dict (loaded from Sheets)."""
+    _CATEGORIES.clear()
+    _CATEGORIES.update(data)
+    CATEGORY_INFO.clear()
+    CATEGORY_INFO.update({k: {"name": v["name"], "emoji": v["emoji"]} for k, v in data.items()})
+    CATEGORY_KEYS.clear()
+    CATEGORY_KEYS.extend(data.keys())
+    CATEGORY_NAMES.clear()
+    CATEGORY_NAMES.extend(v["name"] for v in data.values())
+    INCOME_CATEGORY_KEYS.clear()
+    INCOME_CATEGORY_KEYS.extend(k for k, v in data.items() if v.get("income"))
+    EXPENSE_CATEGORY_KEYS.clear()
+    EXPENSE_CATEGORY_KEYS.extend(k for k, v in data.items() if not v.get("income"))
+    logger.info(f"[classifier] reloaded {len(data)} categories")
 
 
 def classify_rule(description: str) -> Optional[str]:
-    """
-    Tier-1: return category key if a keyword matches, else None.
-    Only checks expense categories.
-    """
+    """Tier-1: keyword match against expense categories. Returns key or None."""
     desc_lower = description.lower()
     for key in EXPENSE_CATEGORY_KEYS:
         if key == "khac":
             continue
-        for kw in _CATEGORIES[key].get("keywords", []):
+        for kw in _CATEGORIES.get(key, {}).get("keywords", []):
             if kw.lower() in desc_lower:
                 return key
     return None
 
 
 def classify_income_rule(description: str) -> str:
-    """Return income category key based on keywords. Defaults to thu_khac."""
+    """Return income category key by keyword. Defaults to last income category."""
     desc_lower = description.lower()
     for key in INCOME_CATEGORY_KEYS:
-        for kw in _CATEGORIES[key].get("keywords", []):
+        for kw in _CATEGORIES.get(key, {}).get("keywords", []):
             if kw.lower() in desc_lower:
                 return key
     return INCOME_CATEGORY_KEYS[-1] if INCOME_CATEGORY_KEYS else "thu_khac"
@@ -65,10 +67,7 @@ _gemini_cache: dict[str, str] = {}
 
 
 async def classify_gemini(description: str, amount: int) -> str:
-    """
-    Tier-2: call Gemini 2.0 Flash to classify.
-    Falls back to 'khac' on any error.
-    """
+    """Tier-2: Gemini 2.0 Flash fallback. Returns 'khac' on any error."""
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key:
         return "khac"
@@ -77,7 +76,6 @@ async def classify_gemini(description: str, amount: int) -> str:
     if use_ai != "true":
         return "khac"
 
-    # Normalize for cache
     cache_key = description.strip().lower()
     if cache_key in _gemini_cache:
         return _gemini_cache[cache_key]
@@ -87,9 +85,7 @@ async def classify_gemini(description: str, amount: int) -> str:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-2.0-flash")
 
-        category_list = ", ".join(
-            f'"{v["name"]}"' for v in _CATEGORIES.values()
-        )
+        category_list = ", ".join(f'"{v["name"]}"' for v in _CATEGORIES.values())
         prompt = (
             f"Phân loại khoản chi/thu sau vào đúng 1 trong các mục: {category_list}.\n"
             f"Số tiền: {amount:,} VNĐ. Mô tả: '{description}'.\n"
@@ -99,7 +95,6 @@ async def classify_gemini(description: str, amount: int) -> str:
         response = model.generate_content(prompt)
         name_returned = response.text.strip().strip('"').strip("'")
 
-        # Map returned name back to key
         for key, data in _CATEGORIES.items():
             if data["name"].lower() == name_returned.lower():
                 _gemini_cache[cache_key] = key
@@ -116,8 +111,7 @@ async def classify_gemini(description: str, amount: int) -> str:
 async def classify(description: str, amount: int, tx_type: str = "chi") -> tuple[str, bool]:
     """
     Returns (category_key, ai_used).
-    For income: Config → income rule.
-    For expense: Config → rule-based → Gemini.
+    Order: Config sheet → income/expense rule → Gemini (expense only).
     """
     from sheets import get_config_mappings
     config = await get_config_mappings()
@@ -145,7 +139,6 @@ def category_display(key: str) -> str:
 
 
 def key_from_name(name: str) -> str:
-    """Return category key from Vietnamese name."""
     for key, data in _CATEGORIES.items():
         if data["name"].lower() == name.lower():
             return key
