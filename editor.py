@@ -50,6 +50,7 @@ async def _send_edit_page(
     send_target,
     rows: list,
     offset: int,
+    keyword: str = "",
 ) -> None:
     page = rows[offset:offset + PAGE_SIZE]
     total = len(rows)
@@ -71,7 +72,11 @@ async def _send_edit_page(
             callback_data=f"editmore_{shown}",
         )])
 
-    header = f"📋 *Các khoản gần đây:* ({shown}/{total})"
+    if keyword:
+        header = f"🔍 *Kết quả \"{keyword}\":* ({shown}/{total})"
+    else:
+        header = f"📋 *Các khoản gần đây:* ({shown}/{total})"
+
     await send_target.reply_text(
         header,
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -81,17 +86,21 @@ async def _send_edit_page(
 
 async def cmd_sua(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyword = " ".join(context.args) if context.args else None
+    is_search = update.message.text.strip().startswith("/tim")
 
     rows = await get_recent_transactions(limit=100, keyword=keyword)
 
     if not rows:
-        await update.message.reply_text(
-            "Không tìm thấy khoản nào." + (" Thử từ khóa khác." if keyword else "")
-        )
+        msg = "Không tìm thấy khoản nào."
+        if keyword:
+            msg += f" Không có kết quả cho \"{keyword}\"."
+        await update.message.reply_text(msg)
         return ConversationHandler.END
 
     context.user_data["edit_rows"] = {str(r["id"]): r for r in rows}
     context.user_data["edit_all_rows"] = rows
+    context.user_data["edit_is_search"] = is_search
+    context.user_data["edit_keyword"] = keyword or ""
 
     await _send_edit_page(update.message, rows, offset=0)
     return EDIT_LIST
@@ -105,7 +114,8 @@ async def edit_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if data.startswith("editmore_"):
         offset = int(data.replace("editmore_", ""))
         rows = context.user_data.get("edit_all_rows", [])
-        await _send_edit_page(query.message, rows, offset)
+        keyword = context.user_data.get("edit_keyword", "")
+        await _send_edit_page(query.message, rows, offset, keyword=keyword)
         return EDIT_LIST
 
     if data.startswith("edit_"):
@@ -269,6 +279,7 @@ def get_editor_conversation_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[
             CommandHandler("edit", cmd_sua),
+            CommandHandler("tim", cmd_sua),
             MessageHandler(filters.Regex(r"^✏️ Sửa/Xóa$"), cmd_sua),
         ],
         states={

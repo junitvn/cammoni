@@ -15,6 +15,7 @@ import time
 import json
 
 import httpx
+from parser import normalize_vn
 import google.auth.crypt
 import google.auth.jwt
 
@@ -353,7 +354,7 @@ async def get_recent_transactions(
         d["_row"] = i
         if user_id and d.get("user") != str(user_id):
             continue
-        if keyword and keyword.lower() not in d.get("description", "").lower():
+        if keyword and normalize_vn(keyword) not in normalize_vn(d.get("description", "")):
             continue
         results.append(d)
 

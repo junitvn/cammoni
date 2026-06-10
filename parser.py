@@ -7,8 +7,16 @@ Rules:
   - Accept dot separators: 1.500 = 1500 → 1,500,000đ
 """
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Optional
+
+
+def normalize_vn(text: str) -> str:
+    """Normalize Vietnamese text: lowercase, remove diacritics (handles ă/â/ê/ô/ơ/ư/đ)."""
+    text = text.lower().replace("đ", "d")
+    nfd = unicodedata.normalize("NFD", text)
+    return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
 
 
 @dataclass
