@@ -2,6 +2,7 @@
 /sua and /xoa flows for editing or deleting past transactions.
 """
 import logging
+from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes, ConversationHandler, CommandHandler,
