@@ -138,8 +138,6 @@ def format_top_text(rows: list, period_label: str, limit: int = 10) -> str:
         bucket.sort(key=lambda r: r["_amt"], reverse=True)
         return bucket[:limit]
 
-    _W = 35
-
     def _section(items: list, counter_start: int) -> tuple[list[str], int]:
         lines = []
         for i, row in enumerate(items, counter_start):
@@ -147,16 +145,9 @@ def format_top_text(rows: list, period_label: str, limit: int = 10) -> str:
             cat = str(row.get("category", "khac"))
             info = CATEGORY_INFO.get(cat, {"emoji": "📦"})
             desc = str(row.get("description", ""))
-            ts = str(row.get("timestamp", ""))[:5]
             name = user_store.get_name(row.get("user", ""))
-            name_str = f" ({name})" if name else ""
-            prefix = f"{i}. "
-            content = f"{info['emoji']} {desc}{name_str} {ts}"
-            max_content = _W - len(prefix) - len(amt_str) - 2
-            if len(content) > max_content:
-                content = content[:max_content - 1] + "…"
-            pad = max(2, _W - len(prefix) - len(content) - len(amt_str))
-            lines.append(f"{prefix}{content}{' ' * pad}{amt_str}")
+            name_str = f"{name} " if name else ""
+            lines.append(f"{i}. {amt_str:<15}{info['emoji']} {name_str}{desc}")
         return lines, counter_start + len(items)
 
     top_thu = _extract("thu")
