@@ -138,17 +138,25 @@ def format_top_text(rows: list, period_label: str, limit: int = 10) -> str:
         bucket.sort(key=lambda r: r["_amt"], reverse=True)
         return bucket[:limit]
 
+    _W = 35
+
     def _section(items: list, counter_start: int) -> tuple[list[str], int]:
         lines = []
         for i, row in enumerate(items, counter_start):
-            amt = row["_amt"]
+            amt_str = format_amount(row["_amt"])
             cat = str(row.get("category", "khac"))
-            info = CATEGORY_INFO.get(cat, {"emoji": "📦", "name": cat})
+            info = CATEGORY_INFO.get(cat, {"emoji": "📦"})
             desc = str(row.get("description", ""))
             ts = str(row.get("timestamp", ""))[:5]
             name = user_store.get_name(row.get("user", ""))
-            name_part = f" _({name})_" if name else ""
-            lines.append(f"{i}. {info['emoji']} {format_amount(amt)} — {desc} _{ts}_{name_part}")
+            name_str = f" ({name})" if name else ""
+            prefix = f"{i}. "
+            content = f"{info['emoji']} {desc}{name_str} {ts}"
+            max_content = _W - len(prefix) - len(amt_str) - 2
+            if len(content) > max_content:
+                content = content[:max_content - 1] + "…"
+            pad = max(2, _W - len(prefix) - len(content) - len(amt_str))
+            lines.append(f"{prefix}{content}{' ' * pad}{amt_str}")
         return lines, counter_start + len(items)
 
     top_thu = _extract("thu")

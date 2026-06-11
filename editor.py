@@ -70,7 +70,7 @@ def _page_markup(rows: list, offset: int) -> InlineKeyboardMarkup:
         )])
     if shown < total:
         keyboard.append([InlineKeyboardButton(
-            f"⬇️ Load thêm ({total - shown} còn lại)",
+            f"⬇️ Xem thêm ({total - shown})",
             callback_data=f"editmore_{shown}",
         )])
     return InlineKeyboardMarkup(keyboard)

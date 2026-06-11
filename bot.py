@@ -793,6 +793,9 @@ async def _send_top(
 _PAGE_SIZE = 10
 
 
+_LIST_LINE_WIDTH = 35
+
+
 def _tx_list_line(row: dict) -> str:
     try:
         amt = format_amount(int(float(str(row.get("amount", 0)))))
@@ -802,8 +805,13 @@ def _tx_list_line(row: dict) -> str:
     info = CATEGORY_INFO.get(cat, {"emoji": "📦"})
     desc = str(row.get("description", ""))
     name = user_store.get_name(row.get("user", ""))
-    name_part = f" _({name})_" if name else ""
-    return f"  {info['emoji']} {desc} · 💰 {amt}{name_part}"
+    name_str = f" ({name})" if name else ""
+    content = f"{info['emoji']} {desc}{name_str}"
+    max_content = _LIST_LINE_WIDTH - len(amt) - 2
+    if len(content) > max_content:
+        content = content[:max_content - 1] + "…"
+    pad = max(2, _LIST_LINE_WIDTH - len(content) - len(amt))
+    return f"  {content}{' ' * pad}{amt}"
 
 
 def _sort_rows_grouped(rows: list) -> list:
@@ -879,7 +887,7 @@ def _txlist_keyboard(uid: int, shown: int, total: int) -> InlineKeyboardMarkup:
     row = []
     if shown < total:
         row.append(InlineKeyboardButton(
-            f"⬇️ Load thêm ({total - shown} còn lại)",
+            f"⬇️ Xem thêm ({total - shown})",
             callback_data=f"txlist_{uid}_{shown}",
         ))
     row.append(InlineKeyboardButton("✏️ Sửa", callback_data=f"txlist_sel_{uid}"))
