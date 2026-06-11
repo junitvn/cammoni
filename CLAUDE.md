@@ -4,6 +4,8 @@ Telegram bot ghi chép thu chi gia đình, lưu vào Google Sheets, phân loại
 
 ## Deploy
 
+> **Lưu ý quan trọng**: Nếu `git push` thất bại do mạng bị chặn (Connection closed, Could not read from remote repository), **KHÔNG** copy file thủ công lên server. Chỉ báo cho người dùng biết để họ tự xử lý (đổi mạng, VPN, v.v.).
+
 - **Oracle instance**: `ubuntu@155.248.181.32` (SSH key: `~/.ssh/oracle_bot`)
 - **Deploy**: `ssh -i ~/.ssh/oracle_bot ubuntu@155.248.181.32 "cd moni-bot && git pull && docker compose up --build -d"`
 - **Logs**: `docker logs moni-bot --tail 30`
