@@ -143,11 +143,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update.effective_user.id):
         return
     await update.message.reply_text(
-        "👋 Chào mừng đến với *Moni Bot*!\n\n"
+        "👋 Chào mừng đến với *Cam's Moni*!\n\n"
         "Nhắn tin để ghi chi tiêu:\n"
         "  `39 cơm trưa` → chi 39.000đ\n"
         "  `.500 lương` → thu 500.000đ\n"
         "  `+200 mẹ cho` → thu 200.000đ\n\n"
+        "Có thể dùng voice chat để ghi lại giao dịch, tìm kiếm hoặc thiết lập ngân sách.\n\n"
         "Dùng menu bên dưới để xem thống kê.",
         parse_mode="Markdown",
         reply_markup=MAIN_KEYBOARD,
@@ -241,15 +242,17 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data[f"tx_type_{tx_id}"] = result.tx_type
     context.user_data[f"tx_ts_{tx_id}"] = timestamp
 
-    date_line = f"\n📅 {timestamp.day}/{timestamp.month}" if result.date_day else ""
     display_name = user_store.get_name(
         update.effective_user.id, update.effective_user.first_name or ""
     )
-    name_tag = f" _({display_name})_" if display_name else ""
-    if result.tx_type == "thu":
-        reply_text = f"💰 Thu nhập: {amt_str}{name_tag}\n{cat_disp} — \"{result.description}\"{date_line}"
-    else:
-        reply_text = f"✅ Đã ghi: {amt_str}{name_tag}\n{cat_disp} — \"{result.description}\"{date_line}"
+    name_part = f" ({display_name})" if display_name else ""
+    type_label = "Thu nhập" if result.tx_type == "thu" else "Chi tiêu"
+    date_str = f"{timestamp.day}/{timestamp.month}"
+    reply_text = (
+        f"✅ {date_str} {type_label}{name_part}:\n"
+        f"  {cat_disp} · {result.description}\n"
+        f"  💰 {amt_str}"
+    )
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✏️ Sửa phân loại", callback_data=f"fix_cat_{tx_id}"),
@@ -334,12 +337,14 @@ async def _handle_batch_transactions(
         context.user_data[f"tx_type_{tx_id}"] = tx_type
         context.user_data[f"tx_ts_{tx_id}"] = timestamp
 
-        name_tag = f" _({uname})_" if uname else ""
-        date_line = f"\n📅 {timestamp.day}/{timestamp.month}" if (date_day or date_offset) else ""
-        if tx_type == "thu":
-            text = f"💰 Thu nhập: {amt_str}{name_tag}\n{cat_disp} — \"{description}\"{date_line}"
-        else:
-            text = f"✅ Đã ghi: {amt_str}{name_tag}\n{cat_disp} — \"{description}\"{date_line}"
+        name_part = f" ({uname})" if uname else ""
+        type_label = "Thu nhập" if tx_type == "thu" else "Chi tiêu"
+        date_str = f"{timestamp.day}/{timestamp.month}"
+        text = (
+            f"✅ {date_str} {type_label}{name_part}:\n"
+            f"  {cat_disp} · {description}\n"
+            f"  💰 {amt_str}"
+        )
 
         keyboard = InlineKeyboardMarkup([
             [
@@ -447,7 +452,7 @@ async def _handle_voice_search(
         return
 
     uid = update.effective_user.id
-    rows_desc = list(reversed(rows))
+    rows_desc = _sort_rows_grouped(rows)
     context.user_data[f"txlist_rows_{uid}"] = rows_desc
 
     label_parts = []
@@ -461,12 +466,8 @@ async def _handle_voice_search(
     total = len(rows_desc)
     shown = min(_PAGE_SIZE, total)
     context.user_data[f"txlist_offset_{uid}"] = shown
-    lines = [f"🔍 *{label}* ({shown}/{total})\n"]
-    for row in rows_desc[:shown]:
-        lines.append(_tx_list_line(row))
-
     await msg.edit_text(
-        "\n".join(lines),
+        _format_txlist_grouped(rows_desc, shown, f"🔍 {label}"),
         reply_markup=_txlist_keyboard(uid, shown, total),
         parse_mode="Markdown",
     )
@@ -499,17 +500,14 @@ async def _handle_voice_category_filter(update, context, msg, result: dict) -> N
         await msg.edit_text(f"Không tìm thấy giao dịch nào cho {label}.")
         return
     uid = update.effective_user.id
-    rows_desc = list(reversed(rows))
+    rows_desc = _sort_rows_grouped(rows)
     context.user_data[f"txlist_rows_{uid}"] = rows_desc
     context.user_data[f"txlist_label_{uid}"] = label
     total = len(rows_desc)
     shown = min(_PAGE_SIZE, total)
     context.user_data[f"txlist_offset_{uid}"] = shown
-    lines = [f"🔍 *{label}* ({shown}/{total})\n"]
-    for row in rows_desc[:shown]:
-        lines.append(_tx_list_line(row))
     await msg.edit_text(
-        "\n".join(lines),
+        _format_txlist_grouped(rows_desc, shown, f"🔍 {label}"),
         reply_markup=_txlist_keyboard(uid, shown, total),
         parse_mode="Markdown",
     )
@@ -796,8 +794,6 @@ _PAGE_SIZE = 10
 
 
 def _tx_list_line(row: dict) -> str:
-    ts = str(row.get("timestamp", ""))[:5]
-    icon = "💰" if str(row.get("type", "chi")) == "thu" else "💸"
     try:
         amt = format_amount(int(float(str(row.get("amount", 0)))))
     except (ValueError, TypeError):
@@ -807,7 +803,34 @@ def _tx_list_line(row: dict) -> str:
     desc = str(row.get("description", ""))
     name = user_store.get_name(row.get("user", ""))
     name_part = f" _({name})_" if name else ""
-    return f"{icon} {ts} {amt} {info['emoji']} {desc}{name_part}"
+    return f"  {info['emoji']} {desc} · 💰 {amt}{name_part}"
+
+
+def _sort_rows_grouped(rows: list) -> list:
+    from sheets import parse_ts as _parse_ts
+    def _key(r):
+        type_order = 0 if str(r.get("type", "chi")) == "thu" else 1
+        dt = _parse_ts(str(r.get("timestamp", "")))
+        return (type_order, -(dt.timestamp() if dt else 0))
+    return sorted(rows, key=_key)
+
+
+def _format_txlist_grouped(rows: list, shown: int, label: str) -> str:
+    lines = [f"📋 *{label}* ({shown}/{len(rows)})\n"]
+    current_type: str | None = None
+    current_date: str | None = None
+    for row in rows[:shown]:
+        tx_type = str(row.get("type", "chi"))
+        date_str = str(row.get("timestamp", ""))[:5]  # dd/mm
+        if tx_type != current_type:
+            current_type = tx_type
+            current_date = None
+            lines.append("\n💰 *Thu nhập*" if tx_type == "thu" else "\n💸 *Chi tiêu*")
+        if date_str != current_date:
+            current_date = date_str
+            lines.append(f"📅 _{date_str}_")
+        lines.append(_tx_list_line(row))
+    return "\n".join(lines)
 
 
 def _stats_keyboard(period: str, uid: int, has_data: bool) -> InlineKeyboardMarkup:
@@ -841,8 +864,7 @@ async def _send_stats(
             "period": period, "custom_start": custom_start,
             "custom_end": custom_end, "filter_uid": None,
         }
-        # Store rows for Danh sách view (newest first)
-        context.user_data[f"txlist_rows_{uid}"] = list(reversed(stats["transactions"]))
+        context.user_data[f"txlist_rows_{uid}"] = _sort_rows_grouped(stats["transactions"])
         context.user_data[f"txlist_label_{uid}"] = PERIODS.get(period, "Khoảng")
 
     await msg.edit_text(
@@ -881,10 +903,7 @@ async def handle_txlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
         shown = min(offset + _PAGE_SIZE, total)
         context.user_data[f"txlist_offset_{uid}"] = shown
-        lines = [f"📋 *Danh sách — {label}* ({shown}/{total})\n"]
-        for row in rows[:shown]:
-            lines.append(_tx_list_line(row))
-        text = "\n".join(lines)
+        text = _format_txlist_grouped(rows, shown, f"Danh sách — {label}")
         markup = _txlist_keyboard(uid, shown, total)
         if offset == 0:
             await query.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")

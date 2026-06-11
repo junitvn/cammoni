@@ -124,34 +124,49 @@ async def compute_stats(
 
 
 def format_top_text(rows: list, period_label: str, limit: int = 10) -> str:
-    expenses = []
-    for row in rows:
-        if str(row.get("type", "chi")) != "chi":
-            continue
-        try:
-            amt = int(row.get("amount", 0))
-        except (ValueError, TypeError):
-            amt = 0
-        if amt <= 0:
-            continue
-        expenses.append(row | {"_amt": amt})
+    def _extract(tx_type: str) -> list:
+        bucket = []
+        for row in rows:
+            if str(row.get("type", "chi")) != tx_type:
+                continue
+            try:
+                amt = int(row.get("amount", 0))
+            except (ValueError, TypeError):
+                amt = 0
+            if amt > 0:
+                bucket.append(row | {"_amt": amt})
+        bucket.sort(key=lambda r: r["_amt"], reverse=True)
+        return bucket[:limit]
 
-    expenses.sort(key=lambda r: r["_amt"], reverse=True)
-    top = expenses[:limit]
+    def _section(items: list, counter_start: int) -> tuple[list[str], int]:
+        lines = []
+        for i, row in enumerate(items, counter_start):
+            amt = row["_amt"]
+            cat = str(row.get("category", "khac"))
+            info = CATEGORY_INFO.get(cat, {"emoji": "📦", "name": cat})
+            desc = str(row.get("description", ""))
+            ts = str(row.get("timestamp", ""))[:5]
+            name = user_store.get_name(row.get("user", ""))
+            name_part = f" _({name})_" if name else ""
+            lines.append(f"{i}. {info['emoji']} {format_amount(amt)} — {desc} _{ts}_{name_part}")
+        return lines, counter_start + len(items)
 
-    if not top:
-        return f"🏆 *Top chi tiêu {period_label}*\n\nChưa có khoản chi nào."
+    top_thu = _extract("thu")
+    top_chi = _extract("chi")
 
-    lines = [f"🏆 *Top chi tiêu {period_label}*\n"]
-    for i, row in enumerate(top, 1):
-        amt = row["_amt"]
-        cat = str(row.get("category", "khac"))
-        info = CATEGORY_INFO.get(cat, {"emoji": "📦", "name": cat})
-        desc = str(row.get("description", ""))
-        ts = str(row.get("timestamp", ""))[:5]  # dd/mm
-        name = user_store.get_name(row.get("user", ""))
-        name_part = f" _({name})_" if name else ""
-        lines.append(f"{i}. {info['emoji']} {format_amount(amt)} — {desc} _{ts}_{name_part}")
+    if not top_thu and not top_chi:
+        return f"🏆 *Top {period_label}*\n\nChưa có giao dịch nào."
+
+    lines = [f"🏆 *Top {period_label}*"]
+    n = 1
+    if top_thu:
+        lines.append("\n💰 *Thu nhập*")
+        section_lines, n = _section(top_thu, n)
+        lines.extend(section_lines)
+    if top_chi:
+        lines.append("\n💸 *Chi tiêu*")
+        section_lines, _ = _section(top_chi, n)
+        lines.extend(section_lines)
 
     return "\n".join(lines)
 
