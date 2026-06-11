@@ -56,51 +56,42 @@ def _transaction_line(row: dict) -> str:
     return f"{type_icon} {ts} · {amt} · {info['emoji']} {desc}{name_part}"
 
 
-async def _send_edit_page(
-    send_target,
-    rows: list,
-    offset: int,
-    search_label: str = "",
-    mode: str = "edit",
-) -> None:
+def _page_markup(rows: list, offset: int) -> InlineKeyboardMarkup:
+    """Build inline keyboard: one button per item + Load thêm."""
     page = rows[offset:offset + PAGE_SIZE]
     total = len(rows)
     shown = min(offset + PAGE_SIZE, total)
-
     keyboard = []
     for row in page:
         tx_id = str(row["id"])
-        label = _transaction_line(row)
-        keyboard.append([InlineKeyboardButton(label, callback_data="noop")])
-        if mode == "search":
-            keyboard.append([
-                InlineKeyboardButton("✏️ Phân loại", callback_data=f"fix_cat_{tx_id}"),
-                InlineKeyboardButton("📅 Ngày", callback_data=f"fix_date_{tx_id}"),
-            ])
-            keyboard.append([
-                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
-                InlineKeyboardButton("🚫 Không tính", callback_data=f"qexcl_{tx_id}"),
-            ])
-        else:
-            keyboard.append([
-                InlineKeyboardButton("✏️ Sửa", callback_data=f"edit_{tx_id}"),
-                InlineKeyboardButton("🗑️ Xóa", callback_data=f"del_{tx_id}"),
-            ])
-
+        keyboard.append([InlineKeyboardButton(
+            _transaction_line(row),
+            callback_data=f"editpick_{tx_id}_{offset}",
+        )])
     if shown < total:
         keyboard.append([InlineKeyboardButton(
             f"⬇️ Load thêm ({total - shown} còn lại)",
             callback_data=f"editmore_{shown}",
         )])
+    return InlineKeyboardMarkup(keyboard)
 
+
+async def _send_edit_page(
+    send_target,
+    rows: list,
+    offset: int,
+    search_label: str = "",
+    mode: str = "edit",  # kept for compat, unused
+) -> None:
+    total = len(rows)
+    shown = min(offset + PAGE_SIZE, total)
     if search_label:
         header = f"🔍 *\"{search_label}\":* ({shown}/{total})"
     else:
         header = f"📋 *Các khoản gần đây:* ({shown}/{total})"
-
     await send_target.reply_text(
         header,
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=_page_markup(rows, offset),
         parse_mode="Markdown",
     )
 
@@ -168,8 +159,44 @@ async def edit_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         offset = int(data.replace("editmore_", ""))
         rows = context.user_data.get("edit_all_rows", [])
         search_label = context.user_data.get("edit_search_label", "")
-        mode = context.user_data.get("edit_mode", "edit")
-        await _send_edit_page(query.message, rows, offset, search_label=search_label, mode=mode)
+        await _send_edit_page(query.message, rows, offset, search_label=search_label)
+        return EDIT_LIST
+
+    if data.startswith("editback_"):
+        # Restore the list page — offset encoded in callback data
+        offset = int(data.replace("editback_", ""))
+        rows = context.user_data.get("edit_all_rows", [])
+        await query.edit_message_reply_markup(reply_markup=_page_markup(rows, offset))
+        return EDIT_LIST
+
+    if data.startswith("editpick_"):
+        # format: editpick_{tx_id}_{page_offset}
+        parts = data.split("_")
+        tx_id = parts[1]
+        page_offset = int(parts[2]) if len(parts) > 2 else 0
+        row = context.user_data.get("edit_rows", {}).get(tx_id, {})
+
+        # Populate user_data so standalone callbacks work
+        context.user_data[f"tx_type_{tx_id}"] = row.get("type", "chi")
+        context.user_data[f"tx_desc_{tx_id}"] = row.get("description", "")
+        ts = _parse_ts(str(row.get("timestamp", "")))
+        if ts:
+            context.user_data[f"tx_ts_{tx_id}"] = ts
+
+        excl = str(row.get("excluded", "")).strip().upper() == "Y"
+        excl_label = "✅ Tính lại" if excl else "🚫 Không tính"
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✏️ Phân loại", callback_data=f"fix_cat_{tx_id}"),
+                InlineKeyboardButton("📅 Ngày", callback_data=f"fix_date_{tx_id}"),
+            ],
+            [
+                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
+                InlineKeyboardButton(excl_label, callback_data=f"qexcl_{tx_id}"),
+            ],
+            [InlineKeyboardButton("❌ Hủy", callback_data=f"editback_{page_offset}")],
+        ])
+        await query.edit_message_reply_markup(reply_markup=keyboard)
         return EDIT_LIST
 
     if data.startswith("edit_"):
@@ -338,7 +365,7 @@ def get_editor_conversation_handler() -> ConversationHandler:
         ],
         states={
             EDIT_LIST: [
-                CallbackQueryHandler(edit_list_callback, pattern="^(edit_|del_|noop|editmore_)")
+                CallbackQueryHandler(edit_list_callback, pattern="^(edit_|del_|noop|editmore_|editpick_|editback_)")
             ],
             EDIT_CHOOSE_FIELD: [
                 CallbackQueryHandler(edit_choose_field_callback, pattern="^field_")
