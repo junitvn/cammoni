@@ -460,20 +460,14 @@ async def _handle_voice_search(
 
     total = len(rows_desc)
     shown = min(_PAGE_SIZE, total)
+    context.user_data[f"txlist_offset_{uid}"] = shown
     lines = [f"🔍 *{label}* ({shown}/{total})\n"]
     for row in rows_desc[:shown]:
         lines.append(_tx_list_line(row))
 
-    kb = []
-    if shown < total:
-        kb.append([InlineKeyboardButton(
-            f"⬇️ Load thêm ({total - shown} còn lại)",
-            callback_data=f"txlist_{uid}_{shown}",
-        )])
-
     await msg.edit_text(
         "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+        reply_markup=_txlist_keyboard(uid, shown, total),
         parse_mode="Markdown",
     )
 
@@ -510,18 +504,13 @@ async def _handle_voice_category_filter(update, context, msg, result: dict) -> N
     context.user_data[f"txlist_label_{uid}"] = label
     total = len(rows_desc)
     shown = min(_PAGE_SIZE, total)
+    context.user_data[f"txlist_offset_{uid}"] = shown
     lines = [f"🔍 *{label}* ({shown}/{total})\n"]
     for row in rows_desc[:shown]:
         lines.append(_tx_list_line(row))
-    kb = []
-    if shown < total:
-        kb.append([InlineKeyboardButton(
-            f"⬇️ Load thêm ({total - shown} còn lại)",
-            callback_data=f"txlist_{uid}_{shown}",
-        )])
     await msg.edit_text(
         "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+        reply_markup=_txlist_keyboard(uid, shown, total),
         parse_mode="Markdown",
     )
 
@@ -863,39 +852,146 @@ async def _send_stats(
     )
 
 
+def _txlist_keyboard(uid: int, shown: int, total: int) -> InlineKeyboardMarkup:
+    """Build the standard txlist keyboard: Load thêm (if any) + Sửa button."""
+    row = []
+    if shown < total:
+        row.append(InlineKeyboardButton(
+            f"⬇️ Load thêm ({total - shown} còn lại)",
+            callback_data=f"txlist_{uid}_{shown}",
+        ))
+    row.append(InlineKeyboardButton("✏️ Sửa", callback_data=f"txlist_sel_{uid}"))
+    return InlineKeyboardMarkup([row])
+
+
 async def handle_txlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    # format: txlist_{uid}_{offset}
-    parts = query.data.split("_")
-    uid, offset = int(parts[1]), int(parts[2])
+    parts = query.data.split("_")  # txlist_{sub}_{...}
+    sub = parts[1]
 
-    rows = context.user_data.get(f"txlist_rows_{uid}", [])
-    label = context.user_data.get(f"txlist_label_{uid}", "Giao dịch")
-    total = len(rows)
-
-    if not rows:
-        await query.answer("Không có giao dịch nào.", show_alert=True)
+    # ── Load page: txlist_{uid}_{offset} ──────────────────────────────────────
+    if sub.lstrip("-").isdigit():
+        uid, offset = int(sub), int(parts[2])
+        rows = context.user_data.get(f"txlist_rows_{uid}", [])
+        label = context.user_data.get(f"txlist_label_{uid}", "Giao dịch")
+        total = len(rows)
+        if not rows:
+            await query.answer("Không có giao dịch nào.", show_alert=True)
+            return
+        shown = min(offset + _PAGE_SIZE, total)
+        context.user_data[f"txlist_offset_{uid}"] = shown
+        lines = [f"📋 *Danh sách — {label}* ({shown}/{total})\n"]
+        for row in rows[:shown]:
+            lines.append(_tx_list_line(row))
+        text = "\n".join(lines)
+        markup = _txlist_keyboard(uid, shown, total)
+        if offset == 0:
+            await query.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+        else:
+            await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
         return
 
-    shown = min(offset + _PAGE_SIZE, total)
-    lines = [f"📋 *Danh sách — {label}* ({shown}/{total})\n"]
-    for row in rows[:shown]:
-        lines.append(_tx_list_line(row))
-    text = "\n".join(lines)
+    # ── Show number selector: txlist_sel_{uid} ────────────────────────────────
+    if sub == "sel":
+        uid = int(parts[2])
+        rows = context.user_data.get(f"txlist_rows_{uid}", [])
+        shown = context.user_data.get(f"txlist_offset_{uid}", min(_PAGE_SIZE, len(rows)))
+        visible = rows[:shown]
+        if not visible:
+            await query.answer("Không có giao dịch nào.", show_alert=True)
+            return
+        keyboard = []
+        row_btns = []
+        for i, row in enumerate(visible):
+            ts = str(row.get("timestamp", ""))[:5]
+            try:
+                amt_k = int(float(str(row.get("amount", 0)))) // 1000
+            except (ValueError, TypeError):
+                amt_k = 0
+            desc = str(row.get("description", ""))[:12]
+            label = f"{i + 1}. {ts} {amt_k}k {desc}"
+            row_btns.append(InlineKeyboardButton(label, callback_data=f"txlist_pick_{uid}_{i}"))
+            if len(row_btns) == 2:
+                keyboard.append(row_btns)
+                row_btns = []
+        if row_btns:
+            keyboard.append(row_btns)
+        keyboard.append([InlineKeyboardButton("❌ Hủy", callback_data=f"txlist_selcancel_{uid}")])
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+        return
 
-    kb = []
-    if shown < total:
-        kb.append([InlineKeyboardButton(
-            f"⬇️ Load thêm ({total - shown} còn lại)",
-            callback_data=f"txlist_{uid}_{shown}",
-        )])
+    # ── Pick item: txlist_pick_{uid}_{index} ──────────────────────────────────
+    if sub == "pick":
+        uid, idx = int(parts[2]), int(parts[3])
+        rows = context.user_data.get(f"txlist_rows_{uid}", [])
+        shown = context.user_data.get(f"txlist_offset_{uid}", min(_PAGE_SIZE, len(rows)))
+        total = len(rows)
+        if idx >= len(rows):
+            await query.answer("Không tìm thấy.", show_alert=True)
+            return
+        row = rows[idx]
+        tx_id = str(row.get("id", ""))
 
-    markup = InlineKeyboardMarkup(kb) if kb else None
-    if offset == 0:
-        await query.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
-    else:
-        await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+        # Populate user_data for fix_cat/fix_date/qdel/qexcl handlers
+        context.user_data[f"tx_type_{tx_id}"] = row.get("type", "chi")
+        context.user_data[f"tx_desc_{tx_id}"] = row.get("description", "")
+        from sheets import parse_ts as _pts
+        ts_obj = _pts(str(row.get("timestamp", "")))
+        if ts_obj:
+            context.user_data[f"tx_ts_{tx_id}"] = ts_obj
+
+        # Restore original list keyboard
+        await query.edit_message_reply_markup(reply_markup=_txlist_keyboard(uid, shown, total))
+
+        # Send item detail as new message
+        ts = str(row.get("timestamp", ""))[:16]
+        tx_type = str(row.get("type", "chi"))
+        type_icon = "💰" if tx_type == "thu" else "💸"
+        try:
+            amt = format_amount(int(float(str(row.get("amount", 0)))))
+        except (ValueError, TypeError):
+            amt = "?"
+        cat = str(row.get("category", "khac"))
+        cat_info = CATEGORY_INFO.get(cat, {"emoji": "📦", "name": cat})
+        desc = str(row.get("description", ""))
+        name = user_store.get_name(row.get("user", ""))
+        name_line = f"\n👤 _{name}_" if name else ""
+        excl = str(row.get("excluded", "")).strip().upper() == "Y"
+        excl_line = "\n🚫 _Không tính vào ngân sách_" if excl else ""
+
+        detail = (
+            f"{type_icon} *{amt}* — {cat_info['emoji']} {cat_info['name']}\n"
+            f'📝 "{desc}"\n'
+            f"📅 {ts}{name_line}{excl_line}"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✏️ Phân loại", callback_data=f"fix_cat_{tx_id}"),
+                InlineKeyboardButton("📅 Ngày", callback_data=f"fix_date_{tx_id}"),
+            ],
+            [
+                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
+                InlineKeyboardButton("🚫 Không tính", callback_data=f"qexcl_{tx_id}"),
+            ],
+            [InlineKeyboardButton("❌ Hủy", callback_data="txlist_itemcancel")],
+        ])
+        await query.message.reply_text(detail, reply_markup=keyboard, parse_mode="Markdown")
+        return
+
+    # ── Cancel number selector: txlist_selcancel_{uid} ────────────────────────
+    if sub == "selcancel":
+        uid = int(parts[2])
+        rows = context.user_data.get(f"txlist_rows_{uid}", [])
+        shown = context.user_data.get(f"txlist_offset_{uid}", min(_PAGE_SIZE, len(rows)))
+        total = len(rows)
+        await query.edit_message_reply_markup(reply_markup=_txlist_keyboard(uid, shown, total))
+        return
+
+    # ── Cancel item detail message: txlist_itemcancel ─────────────────────────
+    if sub == "itemcancel":
+        await query.edit_message_text("❌ Đã hủy.")
+        return
 
 
 async def handle_chart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
