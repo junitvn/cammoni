@@ -20,3 +20,7 @@ def get_name(user_id, fallback: str = "") -> str:
         return _NAMES.get(int(user_id), "") or fallback
     except (ValueError, TypeError):
         return fallback
+
+
+def get_all() -> dict[int, str]:
+    return dict(_NAMES)

@@ -123,17 +123,17 @@ MENU_KEYBOARD = InlineKeyboardMarkup([
      InlineKeyboardButton("🏆 Top tháng", callback_data="menu_topmonth")],
 ])
 
-def make_category_keyboard(tx_id: str, tx_type: str = "chi") -> InlineKeyboardMarkup:
-    keys = INCOME_CATEGORY_KEYS if tx_type == "thu" else EXPENSE_CATEGORY_KEYS
-    buttons = [
-        InlineKeyboardButton(
-            f"{CATEGORY_INFO[k]['emoji']} {CATEGORY_INFO[k]['name']}",
-            callback_data=f"recat_{tx_id}_{k}",
-        )
-        for k in keys
+def _action_sheet_kb(tx_id: str, excluded: bool, cancel_cb: str | None = None) -> InlineKeyboardMarkup:
+    excl_label = "✅ Tính lại" if excluded else "🚫 Không tính"
+    rows = [
+        [InlineKeyboardButton("✏️ Sửa", callback_data=f"edm_enter_{tx_id}")],
+        [
+            InlineKeyboardButton(excl_label, callback_data=f"qexcl_{tx_id}"),
+            InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
+        ],
     ]
-    row_size = 2 if tx_type == "thu" else 3
-    rows = [buttons[i:i + row_size] for i in range(0, len(buttons), row_size)]
+    if cancel_cb:
+        rows.append([InlineKeyboardButton("❌ Hủy", callback_data=cancel_cb)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -254,10 +254,7 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"  💰 {amt_str}"
     )
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✏️ Sửa phân loại", callback_data=f"fix_cat_{tx_id}"),
-        InlineKeyboardButton("📅 Sửa ngày", callback_data=f"fix_date_{tx_id}"),
-    ]])
+    keyboard = _action_sheet_kb(tx_id, excluded=False)
     await update.message.reply_text(reply_text, reply_markup=keyboard, parse_mode="Markdown")
 
     # Write to sheet in background (async, no executor needed)
@@ -346,16 +343,7 @@ async def _handle_batch_transactions(
             f"  💰 {amt_str}"
         )
 
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✏️ Phân loại", callback_data=f"fix_cat_{tx_id}"),
-                InlineKeyboardButton("📅 Ngày", callback_data=f"fix_date_{tx_id}"),
-            ],
-            [
-                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
-                InlineKeyboardButton("🚫 Không tính", callback_data=f"qexcl_{tx_id}"),
-            ],
-        ])
+        keyboard = _action_sheet_kb(tx_id, excluded=False)
         await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
         async def _save(u=uid, un=uname, tt=tx_type, a=amount, ck=cat_key,
@@ -513,134 +501,335 @@ async def _handle_voice_category_filter(update, context, msg, result: dict) -> N
     )
 
 
-async def handle_fix_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show category selection buttons when user taps 'Sửa phân loại'."""
+# ── Edit mode (batched edits with Save/Cancel) ────────────────────────────────
+
+def _edit_screen_text(row: dict, pending: dict) -> str:
+    try:
+        amt = int(pending.get("amount", float(str(row.get("amount", 0)))))
+    except (ValueError, TypeError):
+        amt = 0
+    cat = pending.get("category", str(row.get("category", "khac")))
+    if "timestamp" in pending:
+        ts_str = format_ts(pending["timestamp"])[:10]
+    else:
+        ts_str = str(row.get("timestamp", ""))[:10]
+    desc = pending.get("description", str(row.get("description", "")))
+    uid = pending.get("user", row.get("user", ""))
+    name = pending.get("user_name") if "user_name" in pending else (user_store.get_name(uid) or "")
+
+    cat_info = CATEGORY_INFO.get(cat, {"emoji": "📦", "name": cat})
+    tx_type = str(row.get("type", "chi"))
+    type_icon = "💰" if tx_type == "thu" else "💸"
+    mark = lambda f: " *" if f in pending else ""
+
+    lines = [
+        "✏️ Sửa giao dịch",
+        "",
+        f"{type_icon} {format_amount(amt)}{mark('amount')}",
+        f"🏷 {cat_info['emoji']} {cat_info['name']}{mark('category')}",
+        f"📅 {ts_str}{mark('timestamp')}",
+        f"📝 {desc}{mark('description')}",
+        f"👤 {name or '(không)'}{mark('user')}",
+    ]
+    excl = str(row.get("excluded", "")).strip().upper() == "Y"
+    if excl:
+        lines.append("🚫 Không tính vào ngân sách")
+    if pending:
+        lines += ["", "* = chưa lưu"]
+    else:
+        lines += ["", "Chọn trường để sửa:"]
+    return "\n".join(lines)
+
+
+def _edit_screen_kb(tx_id: str, excluded: bool) -> InlineKeyboardMarkup:
+    excl_label = "✅ Tính lại" if excluded else "🚫 Không tính"
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💰 Số tiền", callback_data=f"edm_fld_{tx_id}_amount"),
+            InlineKeyboardButton("🏷 Phân loại", callback_data=f"edm_fld_{tx_id}_category"),
+        ],
+        [
+            InlineKeyboardButton("📅 Ngày", callback_data=f"edm_fld_{tx_id}_date"),
+            InlineKeyboardButton("📝 Mô tả", callback_data=f"edm_fld_{tx_id}_desc"),
+        ],
+        [InlineKeyboardButton("👤 Người", callback_data=f"edm_fld_{tx_id}_user")],
+        [
+            InlineKeyboardButton(excl_label, callback_data=f"qexcl_{tx_id}"),
+            InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
+        ],
+        [
+            InlineKeyboardButton("💾 Lưu", callback_data=f"edm_save_{tx_id}"),
+            InlineKeyboardButton("❌ Huỷ thay đổi", callback_data=f"edm_cancel_{tx_id}"),
+        ],
+    ])
+
+
+async def _render_edit_screen(query, context, tx_id: str) -> None:
+    row = context.user_data.get(f"edm_row_{tx_id}", {})
+    pending = context.user_data.get(f"edm_pending_{tx_id}", {})
+    text = _edit_screen_text(row, pending)
+    excl = str(row.get("excluded", "")).strip().upper() == "Y"
+    await query.edit_message_text(text, reply_markup=_edit_screen_kb(tx_id, excl))
+
+
+async def handle_edm_enter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    tx_id = query.data.replace("fix_cat_", "")
-    context.user_data["fix_cat_tx_id"] = tx_id
-
-    tx_type = context.user_data.get(f"tx_type_{tx_id}", "chi")
-    await query.edit_message_reply_markup(reply_markup=make_category_keyboard(tx_id, tx_type))
-
-
-async def handle_recat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle category re-selection: recat_{tx_id}_{cat_key}."""
-    query = update.callback_query
-    await query.answer()
-    # data format: "recat_{8-char tx_id}_{cat_key}"
-    without_prefix = query.data[len("recat_"):]  # "{tx_id}_{cat_key}"
-    tx_id = without_prefix[:8]
-    cat_key = without_prefix[9:]  # skip the underscore after tx_id
-
-    await update_transaction_field(tx_id, "category", cat_key)
-
-    # Save learned mapping to Config sheet
-    desc = context.user_data.get(f"tx_desc_{tx_id}", "")
-    if desc:
-        asyncio.create_task(upsert_config_mapping(desc, cat_key))
-
-    cat_disp = category_display(cat_key)
-    old_text = query.message.text
-    first_line = old_text.split("\n")[0]
-    await query.edit_message_text(
-        f"{first_line}\n{cat_disp} ✓ (đã cập nhật)",
+    tx_id = query.data.replace("edm_enter_", "")
+    result = await get_transaction_by_id(tx_id)
+    if not result:
+        await query.answer("Không tìm thấy khoản.", show_alert=True)
+        return
+    _, row = result
+    context.user_data[f"edm_row_{tx_id}"] = row
+    context.user_data[f"edm_pending_{tx_id}"] = {}
+    context.user_data[f"edm_msg_{tx_id}"] = (query.message.chat_id, query.message.message_id)
+    context.user_data[f"edm_snap_{tx_id}"] = (
+        query.message.text or "",
+        query.message.reply_markup,
     )
+    await _render_edit_screen(query, context, tx_id)
 
 
-# ── Date picker handlers ──────────────────────────────────────────────────────
-
-def _date_picker_keyboard(tx_id: str, center: datetime) -> InlineKeyboardMarkup:
-    """7-day date picker centered on `center`, plus manual entry."""
+def _edm_date_kb(tx_id: str, center: datetime) -> InlineKeyboardMarkup:
     row1, row2 = [], []
     for delta in range(-3, 4):
         d = center + timedelta(days=delta)
         label = f"✓{d.day}/{d.month}" if delta == 0 else f"{d.day}/{d.month}"
-        cb = f"setdate_{tx_id}_{d.day}_{d.month}_{d.year}"
+        cb = f"edm_setdate_{tx_id}_{d.day}_{d.month}_{d.year}"
         (row1 if delta < 1 else row2).append(InlineKeyboardButton(label, callback_data=cb))
     return InlineKeyboardMarkup([
-        row1,
-        row2,
-        [InlineKeyboardButton("✏️ Nhập ngày", callback_data=f"inputdate_{tx_id}")],
+        row1, row2,
+        [InlineKeyboardButton("✏️ Nhập ngày", callback_data=f"edm_inputdate_{tx_id}")],
+        [InlineKeyboardButton("⬅️ Quay lại", callback_data=f"edm_back_{tx_id}")],
     ])
 
 
-async def handle_fix_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_edm_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    tx_id = query.data.replace("fix_date_", "")
-    center = context.user_data.get(f"tx_ts_{tx_id}", now_vn())
-    await query.edit_message_reply_markup(reply_markup=_date_picker_keyboard(tx_id, center))
+    rest = query.data[len("edm_fld_"):]
+    tx_id, field = rest[:8], rest[9:]
+    row = context.user_data.get(f"edm_row_{tx_id}", {})
+    pending = context.user_data.get(f"edm_pending_{tx_id}", {})
+
+    if field == "category":
+        tx_type = str(row.get("type", "chi"))
+        keys = INCOME_CATEGORY_KEYS if tx_type == "thu" else EXPENSE_CATEGORY_KEYS
+        cur = pending.get("category", str(row.get("category", "khac")))
+        per_row = 2 if tx_type == "thu" else 3
+        kb_rows, btn_row = [], []
+        for key in keys:
+            info = CATEGORY_INFO[key]
+            label = f"✓ {info['emoji']} {info['name']}" if key == cur else f"{info['emoji']} {info['name']}"
+            btn_row.append(InlineKeyboardButton(label, callback_data=f"edm_setcat_{tx_id}_{key}"))
+            if len(btn_row) == per_row:
+                kb_rows.append(btn_row)
+                btn_row = []
+        if btn_row:
+            kb_rows.append(btn_row)
+        kb_rows.append([InlineKeyboardButton("⬅️ Quay lại", callback_data=f"edm_back_{tx_id}")])
+        await query.edit_message_text("Chọn phân loại:", reply_markup=InlineKeyboardMarkup(kb_rows))
+        return
+
+    if field == "date":
+        from sheets import parse_ts as _pts
+        center = pending.get("timestamp") or _pts(str(row.get("timestamp", ""))) or now_vn()
+        await query.edit_message_text("Chọn ngày:", reply_markup=_edm_date_kb(tx_id, center))
+        return
+
+    if field == "user":
+        names = user_store.get_all()
+        cur_user = str(pending.get("user", row.get("user", "")))
+        kb_rows = []
+        for uid, nm in names.items():
+            prefix = "✓ " if str(uid) == cur_user else ""
+            kb_rows.append([InlineKeyboardButton(
+                f"{prefix}{nm}", callback_data=f"edm_setuser_{tx_id}_{uid}"
+            )])
+        if not kb_rows:
+            kb_rows.append([InlineKeyboardButton("(không có user)", callback_data="noop")])
+        kb_rows.append([InlineKeyboardButton("⬅️ Quay lại", callback_data=f"edm_back_{tx_id}")])
+        await query.edit_message_text("Chọn người:", reply_markup=InlineKeyboardMarkup(kb_rows))
+        return
+
+    # amount or desc → text input
+    context.user_data["edm_waiting"] = (tx_id, field)
+    prompt = "Nhập số tiền mới (VD: `150` = 150.000đ):" if field == "amount" else "Nhập mô tả mới:"
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⬅️ Quay lại", callback_data=f"edm_back_{tx_id}"),
+    ]])
+    await query.edit_message_text(prompt, reply_markup=kb, parse_mode="Markdown")
 
 
-async def handle_setdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_edm_setcat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    # format: setdate_{tx_id}_{day}_{month}_{year}
+    rest = query.data[len("edm_setcat_"):]
+    tx_id, cat_key = rest[:8], rest[9:]
+    pending = context.user_data.setdefault(f"edm_pending_{tx_id}", {})
+    pending["category"] = cat_key
+    await _render_edit_screen(query, context, tx_id)
+
+
+async def handle_edm_setdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
     parts = query.data.split("_")
-    tx_id, day, month, year = parts[1], int(parts[2]), int(parts[3]), int(parts[4])
-
-    ts = context.user_data.get(f"tx_ts_{tx_id}", now_vn())
+    tx_id, day, month, year = parts[2], int(parts[3]), int(parts[4]), int(parts[5])
+    row = context.user_data.get(f"edm_row_{tx_id}", {})
+    pending = context.user_data.setdefault(f"edm_pending_{tx_id}", {})
+    from sheets import parse_ts as _pts
+    base = pending.get("timestamp") or _pts(str(row.get("timestamp", ""))) or now_vn()
     try:
-        new_ts = ts.replace(day=day, month=month, year=year)
+        new_ts = base.replace(day=day, month=month, year=year)
     except ValueError:
         await query.answer("Ngày không hợp lệ.", show_alert=True)
         return
-
-    ok = await update_transaction_field(tx_id, "timestamp", format_ts(new_ts))
-    if ok:
-        context.user_data[f"tx_ts_{tx_id}"] = new_ts
-        old_text = query.message.text.split("\n")[0]
-        await query.edit_message_text(f"{old_text}\n📅 {day}/{month} ✓")
-    else:
-        await query.answer("Không tìm thấy khoản.", show_alert=True)
+    pending["timestamp"] = new_ts
+    await _render_edit_screen(query, context, tx_id)
 
 
-async def handle_inputdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_edm_inputdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    tx_id = query.data.replace("inputdate_", "")
-    context.user_data["waiting_date_tx_id"] = tx_id
-    old_text = query.message.text
-    await query.edit_message_text(
-        f"{old_text}\n\n✏️ Nhập ngày (`15` hoặc `15/6` hoặc `15-6`):",
-        parse_mode="Markdown",
-    )
+    tx_id = query.data.replace("edm_inputdate_", "")
+    context.user_data["edm_waiting"] = (tx_id, "date")
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⬅️ Quay lại", callback_data=f"edm_back_{tx_id}"),
+    ]])
+    await query.edit_message_text("Nhập ngày (`15` hoặc `15/6`):", reply_markup=kb, parse_mode="Markdown")
 
 
-async def handle_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    tx_id = context.user_data.pop("waiting_date_tx_id")
-    text = update.message.text.strip()
-
-    ts = context.user_data.get(f"tx_ts_{tx_id}", now_vn())
-
-    m = re.match(r'^(\d{1,2})[/\-](\d{1,2})$', text)
-    if m:
-        day, month = int(m.group(1)), int(m.group(2))
-    else:
-        m = re.match(r'^(\d{1,2})$', text)
-        if m:
-            day, month = int(m.group(1)), ts.month
-        else:
-            await update.message.reply_text(
-                "Không nhận ra. Nhập `15` hoặc `15/6`.", parse_mode="Markdown"
-            )
-            context.user_data["waiting_date_tx_id"] = tx_id
-            return
-
+async def handle_edm_setuser(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    rest = query.data[len("edm_setuser_"):]
+    tx_id, uid_str = rest[:8], rest[9:]
     try:
-        new_ts = ts.replace(day=day, month=month)
+        uid = int(uid_str)
     except ValueError:
-        await update.message.reply_text("Ngày không hợp lệ.")
-        context.user_data["waiting_date_tx_id"] = tx_id
+        await query.answer("User không hợp lệ.", show_alert=True)
+        return
+    pending = context.user_data.setdefault(f"edm_pending_{tx_id}", {})
+    pending["user"] = uid
+    pending["user_name"] = user_store.get_name(uid) or ""
+    await _render_edit_screen(query, context, tx_id)
+
+
+async def handle_edm_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    tx_id = query.data.replace("edm_back_", "")
+    context.user_data.pop("edm_waiting", None)
+    await _render_edit_screen(query, context, tx_id)
+
+
+async def handle_edm_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    tx_id = query.data.replace("edm_save_", "")
+    pending = context.user_data.get(f"edm_pending_{tx_id}", {})
+    if not pending:
+        await query.answer("Không có thay đổi.", show_alert=True)
         return
 
-    ok = await update_transaction_field(tx_id, "timestamp", format_ts(new_ts))
-    if ok:
-        context.user_data[f"tx_ts_{tx_id}"] = new_ts
-        await update.message.reply_text(f"✅ Đã đổi ngày: {day}/{month}")
+    errors = []
+    for field, value in pending.items():
+        if field == "timestamp":
+            ok = await update_transaction_field(tx_id, "timestamp", format_ts(value))
+        elif field == "user":
+            ok = await update_transaction_field(tx_id, "user", str(value))
+        else:
+            ok = await update_transaction_field(tx_id, field, value)
+        if not ok:
+            errors.append(field)
+
+    if "category" in pending:
+        row = context.user_data.get(f"edm_row_{tx_id}", {})
+        desc = pending.get("description", str(row.get("description", "")))
+        if desc:
+            asyncio.create_task(upsert_config_mapping(desc, pending["category"]))
+
+    for k in (f"edm_pending_{tx_id}", f"edm_row_{tx_id}", f"edm_msg_{tx_id}", f"edm_snap_{tx_id}"):
+        context.user_data.pop(k, None)
+    context.user_data.pop("edm_waiting", None)
+
+    if errors:
+        await query.edit_message_text(f"⚠️ Lưu thất bại: {', '.join(errors)}")
     else:
-        await update.message.reply_text("❌ Không tìm thấy khoản.")
+        await query.edit_message_text("✅ Đã lưu thay đổi.")
+
+
+async def handle_edm_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    tx_id = query.data.replace("edm_cancel_", "")
+    snap = context.user_data.pop(f"edm_snap_{tx_id}", None)
+    for k in (f"edm_pending_{tx_id}", f"edm_row_{tx_id}", f"edm_msg_{tx_id}"):
+        context.user_data.pop(k, None)
+    context.user_data.pop("edm_waiting", None)
+    if snap and snap[0]:
+        try:
+            await query.edit_message_text(snap[0], reply_markup=snap[1])
+            return
+        except Exception:
+            pass
+    await query.edit_message_text("❌ Đã huỷ thay đổi.")
+
+
+async def handle_edm_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    waiting = context.user_data.get("edm_waiting")
+    if not waiting:
+        return False
+    tx_id, field = waiting
+    text = update.message.text.strip()
+    pending = context.user_data.setdefault(f"edm_pending_{tx_id}", {})
+    row = context.user_data.get(f"edm_row_{tx_id}", {})
+
+    if field == "amount":
+        try:
+            pending["amount"] = int(text.replace(".", "").replace(",", "").replace(" ", "")) * 1000
+        except ValueError:
+            await update.message.reply_text("Số không hợp lệ, nhập lại:")
+            return True
+    elif field == "desc":
+        pending["description"] = text
+    elif field == "date":
+        from sheets import parse_ts as _pts
+        base = pending.get("timestamp") or _pts(str(row.get("timestamp", ""))) or now_vn()
+        m = re.match(r'^(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?$', text)
+        if m:
+            day, month = int(m.group(1)), int(m.group(2))
+            year = int(m.group(3)) if m.group(3) else base.year
+            if year < 100:
+                year += 2000
+        else:
+            m = re.match(r'^(\d{1,2})$', text)
+            if not m:
+                await update.message.reply_text("Không nhận ra. Nhập `15` hoặc `15/6`.", parse_mode="Markdown")
+                return True
+            day, month, year = int(m.group(1)), base.month, base.year
+        try:
+            pending["timestamp"] = base.replace(day=day, month=month, year=year)
+        except ValueError:
+            await update.message.reply_text("Ngày không hợp lệ, nhập lại:")
+            return True
+
+    context.user_data.pop("edm_waiting", None)
+    msg_loc = context.user_data.get(f"edm_msg_{tx_id}")
+    if msg_loc:
+        chat_id, message_id = msg_loc
+        excl = str(row.get("excluded", "")).strip().upper() == "Y"
+        try:
+            await context.bot.edit_message_text(
+                _edit_screen_text(row, pending),
+                chat_id=chat_id, message_id=message_id,
+                reply_markup=_edit_screen_kb(tx_id, excl),
+            )
+        except Exception as e:
+            logger.warning(f"render edit screen failed: {e}")
+    return True
 
 
 # ── Quick delete / exclude handlers ──────────────────────────────────────────
@@ -660,22 +849,23 @@ async def handle_qdelok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     query = update.callback_query
     await query.answer()
     if query.data.startswith("qdelno_"):
-        # Restore keyboard
         tx_id = query.data.replace("qdelno_", "")
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✏️ Phân loại", callback_data=f"fix_cat_{tx_id}"),
-                InlineKeyboardButton("📅 Ngày", callback_data=f"fix_date_{tx_id}"),
-            ],
-            [
-                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
-                InlineKeyboardButton("🚫 Không tính", callback_data=f"qexcl_{tx_id}"),
-            ],
-        ])
-        await query.edit_message_reply_markup(reply_markup=keyboard)
+        in_edit_mode = f"edm_row_{tx_id}" in context.user_data
+        if in_edit_mode:
+            await _render_edit_screen(query, context, tx_id)
+            return
+        result = await get_transaction_by_id(tx_id)
+        excl = False
+        if result:
+            _, row = result
+            excl = str(row.get("excluded", "")).strip().upper() == "Y"
+        await query.edit_message_reply_markup(reply_markup=_action_sheet_kb(tx_id, excl))
         return
     tx_id = query.data.replace("qdelok_", "")
     ok = await delete_transaction(tx_id)
+    for k in (f"edm_pending_{tx_id}", f"edm_row_{tx_id}", f"edm_msg_{tx_id}", f"edm_snap_{tx_id}"):
+        context.user_data.pop(k, None)
+    context.user_data.pop("edm_waiting", None)
     first_line = (query.message.text or "").split("\n")[0]
     if ok:
         await query.edit_message_text(f"🗑️ Đã xóa: {first_line}")
@@ -695,6 +885,12 @@ async def handle_qexcl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     currently_excluded = str(row.get("excluded", "")).strip().upper() == "Y"
     new_val = "" if currently_excluded else "Y"
     await update_transaction_field(tx_id, "excluded", new_val)
+
+    if f"edm_row_{tx_id}" in context.user_data:
+        context.user_data[f"edm_row_{tx_id}"]["excluded"] = new_val
+        await _render_edit_screen(query, context, tx_id)
+        return
+
     old_text = query.message.text or ""
     lines = [l for l in old_text.split("\n") if not l.startswith("🚫") and not l.startswith("✅ Đã tính")]
     base = "\n".join(lines)
@@ -984,17 +1180,7 @@ async def handle_txlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f'📝 "{desc}"\n'
             f"📅 {ts}{name_line}{excl_line}"
         )
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✏️ Phân loại", callback_data=f"fix_cat_{tx_id}"),
-                InlineKeyboardButton("📅 Ngày", callback_data=f"fix_date_{tx_id}"),
-            ],
-            [
-                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
-                InlineKeyboardButton("🚫 Không tính", callback_data=f"qexcl_{tx_id}"),
-            ],
-            [InlineKeyboardButton("❌ Hủy", callback_data="txlist_itemcancel")],
-        ])
+        keyboard = _action_sheet_kb(tx_id, excl, cancel_cb="txlist_itemcancel")
         await query.message.reply_text(detail, reply_markup=keyboard, parse_mode="Markdown")
         return
 
@@ -1095,11 +1281,15 @@ def main() -> None:
     app.add_handler(get_budget_conversation_handler())
 
     # Inline callbacks
-    app.add_handler(CallbackQueryHandler(handle_fix_category, pattern=r"^fix_cat_"))
-    app.add_handler(CallbackQueryHandler(handle_recat, pattern=r"^recat_"))
-    app.add_handler(CallbackQueryHandler(handle_fix_date, pattern=r"^fix_date_"))
-    app.add_handler(CallbackQueryHandler(handle_setdate, pattern=r"^setdate_"))
-    app.add_handler(CallbackQueryHandler(handle_inputdate, pattern=r"^inputdate_"))
+    app.add_handler(CallbackQueryHandler(handle_edm_enter, pattern=r"^edm_enter_"))
+    app.add_handler(CallbackQueryHandler(handle_edm_field, pattern=r"^edm_fld_"))
+    app.add_handler(CallbackQueryHandler(handle_edm_setcat, pattern=r"^edm_setcat_"))
+    app.add_handler(CallbackQueryHandler(handle_edm_setdate, pattern=r"^edm_setdate_"))
+    app.add_handler(CallbackQueryHandler(handle_edm_inputdate, pattern=r"^edm_inputdate_"))
+    app.add_handler(CallbackQueryHandler(handle_edm_setuser, pattern=r"^edm_setuser_"))
+    app.add_handler(CallbackQueryHandler(handle_edm_back, pattern=r"^edm_back_"))
+    app.add_handler(CallbackQueryHandler(handle_edm_save, pattern=r"^edm_save_"))
+    app.add_handler(CallbackQueryHandler(handle_edm_cancel, pattern=r"^edm_cancel_"))
     app.add_handler(CallbackQueryHandler(handle_qdel, pattern=r"^qdel_"))
     app.add_handler(CallbackQueryHandler(handle_qdelok, pattern=r"^(qdelok_|qdelno_)"))
     app.add_handler(CallbackQueryHandler(handle_qexcl, pattern=r"^qexcl_"))
@@ -1197,9 +1387,9 @@ async def _combined_text_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     STATS_BUTTONS = {"🗓 Tháng này", "🏆 Top tháng", "💰 Ngân sách"}
 
-    if context.user_data.get("waiting_date_tx_id"):
-        await handle_date_input(update, context)
-        return
+    if context.user_data.get("edm_waiting"):
+        if await handle_edm_text_input(update, context):
+            return
 
     if text in STATS_BUTTONS or context.user_data.get("waiting_custom_range"):
         await handle_stats_keyboard(update, context)

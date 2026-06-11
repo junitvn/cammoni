@@ -394,6 +394,7 @@ async def get_transaction_by_id(tx_id: str) -> Optional[tuple[int, dict]]:
 async def update_transaction_field(tx_id: str, field: str, value) -> bool:
     col_map = {
         "timestamp": COL_TIMESTAMP,
+        "user": COL_USER,
         "type": COL_TYPE,
         "amount": COL_AMOUNT,
         "category": COL_CATEGORY,
