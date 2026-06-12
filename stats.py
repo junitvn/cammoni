@@ -51,17 +51,22 @@ async def compute_stats(
 
     total_chi = 0
     total_thu = 0
+    total_excluded_chi = 0
     by_cat: dict[str, int] = {k: 0 for k in CATEGORY_KEYS}
 
     for row in rows:
-        if str(row.get("excluded", "")).strip().upper() == "Y":
-            continue
+        excluded = str(row.get("excluded", "")).strip().upper() == "Y"
         try:
             amt = int(row.get("amount", 0))
         except (ValueError, TypeError):
             amt = 0
         tx_type = str(row.get("type", "chi"))
         cat = str(row.get("category", "khac"))
+
+        if excluded:
+            if tx_type == "chi":
+                total_excluded_chi += amt
+            continue
 
         if tx_type == "thu":
             total_thu += amt
@@ -116,6 +121,7 @@ async def compute_stats(
         "end": end,
         "total_chi": total_chi,
         "total_thu": total_thu,
+        "total_excluded_chi": total_excluded_chi,
         "so_du": so_du,
         "by_category": by_cat,
         "transactions": rows,
@@ -179,6 +185,9 @@ def format_stats_text(stats: dict) -> str:
         period_label = PERIODS.get(stats["period"], "Khoảng thời gian")
     lines.append(f"📊 *{period_label}*")
     lines.append(f"💸 Chi: {format_amount(stats['total_chi'])}")
+    excluded_chi = stats.get("total_excluded_chi", 0)
+    if excluded_chi:
+        lines.append(f"🚫 Chi ngoài ngân sách: {format_amount(excluded_chi)}")
     lines.append(f"💰 Thu: {format_amount(stats['total_thu'])}")
     so_du = stats["so_du"]
     if so_du >= 0:
