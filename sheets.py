@@ -157,21 +157,50 @@ async def init_sheets() -> None:
     current_month = _month_sheet_name()
 
     now = datetime.now(TZ)
-    old_slash_name = f"T{now.month}/{now.year}"  # old format with slash
+    old_slash_name = f"T{now.month}/{now.year}"  # old slash format T6/2026
 
-    # One-time migration: rename old slash-format sheet T6/2026 → T6.2026
-    if old_slash_name in existing_titles and current_month not in existing_titles:
-        r = await client.post(
-            f"{SHEETS_BASE}/{sheet_id}:batchUpdate",
-            headers=await _auth_headers(),
-            json={"requests": [{"updateSheetProperties": {
-                "properties": {"sheetId": existing_titles[old_slash_name], "title": current_month},
-                "fields": "title",
-            }}]},
-        )
-        r.raise_for_status()
-        existing_titles[current_month] = existing_titles.pop(old_slash_name)
-        logger.info(f"[sheets] renamed '{old_slash_name}' → '{current_month}'")
+    # One-time migration: merge T6/2026 data into T6.2026 then delete old sheet
+    if old_slash_name in existing_titles:
+        try:
+            old_rows = await _get_values_query(f"'{old_slash_name}'!A:J")
+            data_rows = old_rows[1:] if old_rows and old_rows[0] else old_rows
+            if current_month not in existing_titles:
+                # Just rename — fastest path
+                r = await client.post(
+                    f"{SHEETS_BASE}/{sheet_id}:batchUpdate",
+                    headers=await _auth_headers(),
+                    json={"requests": [{"updateSheetProperties": {
+                        "properties": {"sheetId": existing_titles[old_slash_name], "title": current_month},
+                        "fields": "title",
+                    }}]},
+                )
+                r.raise_for_status()
+                existing_titles[current_month] = existing_titles.pop(old_slash_name)
+                logger.info(f"[sheets] renamed '{old_slash_name}' → '{current_month}'")
+            elif data_rows:
+                # Both exist: copy old data rows into T6.2026 then delete T6/2026
+                from urllib.parse import quote as _q
+                await _append_values(_sr(current_month, "A:J"), data_rows)
+                r = await client.post(
+                    f"{SHEETS_BASE}/{sheet_id}:batchUpdate",
+                    headers=await _auth_headers(),
+                    json={"requests": [{"deleteSheet": {"sheetId": existing_titles[old_slash_name]}}]},
+                )
+                r.raise_for_status()
+                del existing_titles[old_slash_name]
+                logger.info(f"[sheets] merged {len(data_rows)} rows from '{old_slash_name}' into '{current_month}' and deleted old sheet")
+            else:
+                # Old sheet is empty — just delete it
+                r = await client.post(
+                    f"{SHEETS_BASE}/{sheet_id}:batchUpdate",
+                    headers=await _auth_headers(),
+                    json={"requests": [{"deleteSheet": {"sheetId": existing_titles[old_slash_name]}}]},
+                )
+                r.raise_for_status()
+                del existing_titles[old_slash_name]
+                logger.info(f"[sheets] deleted empty old sheet '{old_slash_name}'")
+        except Exception as e:
+            logger.warning(f"[sheets] migration from '{old_slash_name}' failed (non-fatal): {e}")
 
     # One-time migration: rename legacy "Transactions" → current month sheet
     if "Transactions" in existing_titles and current_month not in existing_titles:
@@ -239,6 +268,20 @@ async def init_sheets() -> None:
 def _enc(range_: str) -> str:
     """URL-encode a Sheets range for safe use in URL paths (preserves ! and :)."""
     return _url_quote(range_, safe="!:")
+
+
+async def _get_values_query(range_: str) -> list[list]:
+    """Read sheet values using `ranges` as a query param — safe for sheet names with /."""
+    sheet_id = _sheet_id()
+    client = get_httpx_client()
+    r = await client.get(
+        f"{SHEETS_BASE}/{sheet_id}/values:batchGet",
+        headers=await _auth_headers(),
+        params={"ranges": range_},
+    )
+    r.raise_for_status()
+    vr = r.json().get("valueRanges", [])
+    return vr[0].get("values", []) if vr else []
 
 
 async def _get_values(range_: str) -> list[list]:
@@ -332,7 +375,7 @@ def _months_in_range(start: datetime, end: datetime) -> list[str]:
     names = []
     year, month = start.year, start.month
     while (year, month) <= (end.year, end.month):
-        names.append(f"T{month}/{year}")
+        names.append(f"T{month}.{year}")
         month += 1
         if month > 12:
             month = 1
