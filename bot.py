@@ -531,7 +531,7 @@ async def _handle_voice_stats(update, context, msg, result: dict) -> None:
             _lbl = f"{format_ts(_s)[:5]}-{format_ts(stats['end'])[:5]}"
         else:
             _lbl = "Thống kê"
-        context.user_data[f"txlist_rows_{uid}"] = list(reversed(stats["transactions"]))
+        context.user_data[f"txlist_rows_{uid}"] = _sort_rows_grouped(stats["transactions"])
         context.user_data[f"txlist_label_{uid}"] = _lbl
         context.user_data[f"txlist_offset_{uid}"] = min(_PAGE_SIZE, len(stats["transactions"]))
         context.user_data[f"chart_params_{uid}"] = {
@@ -1157,8 +1157,7 @@ async def _send_stats(
             "period": period, "custom_start": custom_start,
             "custom_end": custom_end, "filter_uid": None,
         }
-        # Store rows for Danh sách view (newest first)
-        context.user_data[f"txlist_rows_{uid}"] = list(reversed(stats["transactions"]))
+        context.user_data[f"txlist_rows_{uid}"] = _sort_rows_grouped(stats["transactions"])
         # Derive a good label: show month/year for monthly stats
         _s = stats.get("start")
         if period == "month" and _s:
