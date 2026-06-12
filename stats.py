@@ -77,7 +77,7 @@ async def compute_stats(
             else:
                 by_cat["khac"] += amt
 
-    so_du = total_thu - total_chi
+    so_du = total_thu - total_chi - total_excluded_chi
 
     # Budget check (month only, when not custom)
     budgets = {}
