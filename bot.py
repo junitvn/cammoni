@@ -665,7 +665,7 @@ async def handle_edm_enter(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not result:
         await query.answer("Không tìm thấy khoản.", show_alert=True)
         return
-    _, row = result
+    _, row, _sht = result
     context.user_data[f"edm_row_{tx_id}"] = row
     context.user_data[f"edm_pending_{tx_id}"] = {}
     context.user_data[f"edm_msg_{tx_id}"] = (query.message.chat_id, query.message.message_id)
@@ -942,7 +942,7 @@ async def handle_qdelok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         result = await get_transaction_by_id(tx_id)
         excl = False
         if result:
-            _, row = result
+            _, row, _sht = result
             excl = str(row.get("excluded", "")).strip().upper() == "Y"
         await query.edit_message_reply_markup(reply_markup=_action_sheet_kb(tx_id, excl))
         return
