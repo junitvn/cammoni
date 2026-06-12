@@ -125,7 +125,7 @@ MENU_KEYBOARD = InlineKeyboardMarkup([
 ])
 
 def _action_sheet_kb(tx_id: str, excluded: bool, cancel_cb: str | None = None) -> InlineKeyboardMarkup:
-    excl_label = "✅ Tính lại" if excluded else "🚫 Không tính"
+    excl_label = "✅ Tính vào ngân sách" if excluded else "🚫 Không tính"
     rows = [
         [InlineKeyboardButton("✏️ Sửa", callback_data=f"edm_enter_{tx_id}")],
         [
@@ -627,7 +627,7 @@ def _edit_screen_text(row: dict, pending: dict) -> str:
 
 
 def _edit_screen_kb(tx_id: str, excluded: bool) -> InlineKeyboardMarkup:
-    excl_label = "✅ Tính lại" if excluded else "🚫 Không tính"
+    excl_label = "✅ Tính vào ngân sách" if excluded else "🚫 Không tính"
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("💰 Số tiền", callback_data=f"edm_fld_{tx_id}_amount"),

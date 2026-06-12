@@ -212,16 +212,14 @@ async def edit_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             context.user_data[f"tx_ts_{tx_id}"] = ts
 
         excl = str(row.get("excluded", "")).strip().upper() == "Y"
-        excl_label = "✅ Tính lại" if excl else "🚫 Không tính"
+        excl_label = "✅ Tính vào ngân sách" if excl else "🚫 Không tính"
         keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
-                InlineKeyboardButton("✏️ Sửa", callback_data=f"editfields_{tx_id}_{page_offset}"),
-            ],
+            [InlineKeyboardButton("✏️ Sửa", callback_data=f"editfields_{tx_id}_{page_offset}")],
             [
                 InlineKeyboardButton(excl_label, callback_data=f"qexcl_{tx_id}"),
-                InlineKeyboardButton("❌ Hủy", callback_data=f"editback_{page_offset}"),
+                InlineKeyboardButton("🗑️ Xóa", callback_data=f"qdel_{tx_id}"),
             ],
+            [InlineKeyboardButton("❌ Hủy", callback_data=f"editback_{page_offset}")],
         ])
         await query.edit_message_text(_tx_detail_text(row), reply_markup=keyboard, parse_mode="Markdown")
         return EDIT_LIST
