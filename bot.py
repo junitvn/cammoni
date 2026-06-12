@@ -881,7 +881,7 @@ async def handle_qexcl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not result:
         await query.answer("Không tìm thấy khoản.", show_alert=True)
         return
-    _, row = result
+    _, row, _sheet = result
     currently_excluded = str(row.get("excluded", "")).strip().upper() == "Y"
     new_val = "" if currently_excluded else "Y"
     await update_transaction_field(tx_id, "excluded", new_val)

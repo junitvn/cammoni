@@ -141,29 +141,41 @@ def _sheet_id() -> str:
 # ── Sheet init ────────────────────────────────────────────────────────────────
 
 async def init_sheets() -> None:
-    """Ensure Transactions and Budget worksheets exist with correct headers."""
+    """Ensure monthly transaction sheets and shared sheets exist with correct headers."""
     logger.info("[sheets] init_sheets: checking worksheets...")
     sheet_id = _sheet_id()
     client = get_httpx_client()
 
-    # Get spreadsheet metadata
-    r = await client.get(
-        f"{SHEETS_BASE}/{sheet_id}",
-        headers=await _auth_headers(),
-    )
+    r = await client.get(f"{SHEETS_BASE}/{sheet_id}", headers=await _auth_headers())
     r.raise_for_status()
     meta = r.json()
-    existing = {s["properties"]["title"] for s in meta.get("sheets", [])}
-    logger.info(f"[sheets] init_sheets: existing sheets={existing}")
+    sheet_list = meta.get("sheets", [])
+    existing_titles = {s["properties"]["title"]: s["properties"]["sheetId"] for s in sheet_list}
+    logger.info(f"[sheets] init_sheets: existing={list(existing_titles.keys())}")
 
-    # Create missing sheets
+    current_month = _month_sheet_name()
+
+    # One-time migration: rename legacy "Transactions" → current month sheet
+    if "Transactions" in existing_titles and current_month not in existing_titles:
+        r = await client.post(
+            f"{SHEETS_BASE}/{sheet_id}:batchUpdate",
+            headers=await _auth_headers(),
+            json={"requests": [{"updateSheetProperties": {
+                "properties": {"sheetId": existing_titles["Transactions"], "title": current_month},
+                "fields": "title",
+            }}]},
+        )
+        r.raise_for_status()
+        existing_titles[current_month] = existing_titles.pop("Transactions")
+        logger.info(f"[sheets] migrated 'Transactions' → '{current_month}'")
+
+    # Create shared sheets if missing
     requests_body = []
-    for name in ("Transactions", "Budget", "Config", "Categories", "Users"):
-        if name not in existing:
-            requests_body.append({
-                "addSheet": {"properties": {"title": name, "gridProperties": {"rowCount": 1000, "columnCount": 20}}}
-            })
-
+    for name in ("Budget", "Config", "Categories", "Users"):
+        if name not in existing_titles:
+            requests_body.append({"addSheet": {"properties": {
+                "title": name, "gridProperties": {"rowCount": 1000, "columnCount": 20},
+            }}})
     if requests_body:
         r = await client.post(
             f"{SHEETS_BASE}/{sheet_id}:batchUpdate",
@@ -171,36 +183,35 @@ async def init_sheets() -> None:
             json={"requests": requests_body},
         )
         r.raise_for_status()
-        logger.info(f"[sheets] init_sheets: created missing sheets")
 
-    # Ensure headers
+    # Ensure headers for shared sheets
     for name, header in [
-        ("Transactions", TRANSACTIONS_HEADER),
         ("Budget", BUDGET_HEADER),
         ("Config", CONFIG_HEADER),
         ("Categories", CATEGORIES_HEADER),
         ("Users", USERS_HEADER),
     ]:
         values = await _get_values(f"{name}!1:1")
-        existing = values[0] if values else []
-        if existing == header:
+        cur = values[0] if values else []
+        if cur == header:
             continue
-        # Migrate: if existing header is a prefix of the new header, only write missing columns
-        if existing and header[:len(existing)] == existing:
-            extra = header[len(existing):]
-            start_col = chr(ord('A') + len(existing))
-            end_col = chr(ord('A') + len(header) - 1)
-            await _set_values(f"{name}!{start_col}1:{end_col}1", [extra])
-            logger.info(f"[sheets] init_sheets: added columns {extra} to '{name}'")
+        if cur and header[:len(cur)] == cur:
+            extra = header[len(cur):]
+            sc = chr(ord('A') + len(cur))
+            ec = chr(ord('A') + len(header) - 1)
+            await _set_values(f"{name}!{sc}1:{ec}1", [extra])
         else:
             await _set_values(f"{name}!A1", [header])
-            logger.info(f"[sheets] init_sheets: wrote header for '{name}'")
+        logger.info(f"[sheets] wrote header for '{name}'")
 
     # Seed Categories if empty
     cat_rows = await _get_values("Categories!A:E")
     if len(cat_rows) <= 1:
         await _append_values("Categories!A:E", _CATEGORIES_SEED)
         logger.info("[sheets] init_sheets: seeded Categories")
+
+    # Ensure current month sheet exists
+    await _ensure_month_sheet(current_month)
 
     logger.info("[sheets] init_sheets: done")
 
@@ -274,6 +285,89 @@ async def _get_sheet_gid(sheet_name: str) -> int:
     raise ValueError(f"Sheet '{sheet_name}' not found")
 
 
+# ── Monthly sheet helpers ─────────────────────────────────────────────────────
+
+# Cache of sheets already confirmed to exist (avoids repeated API calls)
+_known_month_sheets: set[str] = set()
+
+
+def _month_sheet_name(dt: Optional[datetime] = None) -> str:
+    """Sheet name for a given month, e.g. 'T6/2026'."""
+    dt = dt or datetime.now(TZ)
+    return f"T{dt.month}/{dt.year}"
+
+
+def _prev_month(dt: datetime) -> datetime:
+    """Return a datetime in the previous month."""
+    if dt.month == 1:
+        return dt.replace(year=dt.year - 1, month=12, day=1)
+    return dt.replace(month=dt.month - 1, day=1)
+
+
+def _months_in_range(start: datetime, end: datetime) -> list[str]:
+    """Return ordered list of month sheet names covering [start, end]."""
+    names = []
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        names.append(f"T{month}/{year}")
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return names
+
+
+def _sr(sheet_name: str, range_: str) -> str:
+    """Format 'SheetName!A:J', quoting sheet name if it contains special chars."""
+    if any(c in sheet_name for c in " /\\!#"):
+        return f"'{sheet_name}'!{range_}"
+    return f"{sheet_name}!{range_}"
+
+
+async def _safe_get_values(range_: str) -> list[list]:
+    """Like _get_values but returns [] instead of raising on missing/bad sheet."""
+    try:
+        return await _get_values(range_)
+    except Exception:
+        return []
+
+
+async def _ensure_month_sheet(name: str) -> None:
+    """Create the month sheet with header if it doesn't exist yet."""
+    global _known_month_sheets
+    if name in _known_month_sheets:
+        return
+    values = await _safe_get_values(_sr(name, "1:1"))
+    if values and values[0] == TRANSACTIONS_HEADER:
+        _known_month_sheets.add(name)
+        return
+    if values and values[0] and TRANSACTIONS_HEADER[:len(values[0])] == values[0]:
+        # Header exists but missing new columns — patch
+        extra = TRANSACTIONS_HEADER[len(values[0]):]
+        start_col = chr(ord('A') + len(values[0]))
+        end_col = chr(ord('A') + len(TRANSACTIONS_HEADER) - 1)
+        await _set_values(_sr(name, f"{start_col}1:{end_col}1"), [extra])
+        _known_month_sheets.add(name)
+        return
+    if not values:
+        # Sheet doesn't exist — create it
+        sheet_id = _sheet_id()
+        client = get_httpx_client()
+        r = await client.post(
+            f"{SHEETS_BASE}/{sheet_id}:batchUpdate",
+            headers=await _auth_headers(),
+            json={"requests": [{"addSheet": {"properties": {
+                "title": name,
+                "gridProperties": {"rowCount": 2000, "columnCount": 12},
+            }}}]},
+        )
+        r.raise_for_status()
+        logger.info(f"[sheets] created month sheet '{name}'")
+    await _set_values(_sr(name, "A1"), [TRANSACTIONS_HEADER])
+    _known_month_sheets.add(name)
+    logger.info(f"[sheets] wrote header for '{name}'")
+
+
 # ── Time helpers ──────────────────────────────────────────────────────────────
 
 def now_vn() -> datetime:
@@ -337,10 +431,32 @@ async def add_transaction(
         user_name,
         "Y" if excluded else "",
     ]
-    logger.info(f"[sheets] add_transaction: writing tx_id={tx_id}")
-    await _append_values("Transactions!A:J", [row])
+    sheet_name = _month_sheet_name(timestamp)
+    await _ensure_month_sheet(sheet_name)
+    logger.info(f"[sheets] add_transaction: writing tx_id={tx_id} to '{sheet_name}'")
+    await _append_values(_sr(sheet_name, "A:J"), [row])
     logger.info(f"[sheets] add_transaction: done tx_id={tx_id}")
     return tx_id
+
+
+def _filter_row(d: dict, user_id, keyword, category, amount_min, amount_max) -> bool:
+    """Return True if row passes all filters."""
+    if user_id and d.get("user") != str(user_id):
+        return False
+    if keyword and normalize_vn(keyword) not in normalize_vn(d.get("description", "")):
+        return False
+    if category and d.get("category") != category:
+        return False
+    if amount_min is not None or amount_max is not None:
+        try:
+            amt = int(float(str(d.get("amount", 0))))
+        except (ValueError, TypeError):
+            amt = 0
+        if amount_min is not None and amt < amount_min:
+            return False
+        if amount_max is not None and amt > amount_max:
+            return False
+    return True
 
 
 async def get_recent_transactions(
@@ -351,43 +467,59 @@ async def get_recent_transactions(
     amount_max: Optional[int] = None,
     category: Optional[str] = None,
 ) -> list[dict]:
-    rows = await _get_values("Transactions!A:J")
-    if not rows or rows[0] != TRANSACTIONS_HEADER:
-        return []
+    """Fetch recent transactions across monthly sheets (newest first)."""
+    now = now_vn()
+    all_results: list[dict] = []
 
-    results = []
-    for i, row in enumerate(rows[1:], start=2):
-        row = _pad_row(row, len(TRANSACTIONS_HEADER))
-        d = dict(zip(TRANSACTIONS_HEADER, row))
-        d["_row"] = i
-        if user_id and d.get("user") != str(user_id):
+    for i in range(6):  # search up to 6 months back
+        if i == 0:
+            month_dt = now
+        else:
+            month_dt = now
+            for _ in range(i):
+                month_dt = _prev_month(month_dt)
+        sheet_name = _month_sheet_name(month_dt)
+        rows = await _safe_get_values(_sr(sheet_name, "A:J"))
+        if not rows or rows[0] != TRANSACTIONS_HEADER:
+            if i > 0:
+                break  # no more historical months
             continue
-        if keyword and normalize_vn(keyword) not in normalize_vn(d.get("description", "")):
+        month_results = []
+        for j, row in enumerate(rows[1:], start=2):
+            row = _pad_row(row, len(TRANSACTIONS_HEADER))
+            d = dict(zip(TRANSACTIONS_HEADER, row))
+            d["_row"] = j
+            d["_sheet"] = sheet_name
+            if _filter_row(d, user_id, keyword, category, amount_min, amount_max):
+                month_results.append(d)
+        # Prepend older month's rows so all_results stays chronological
+        all_results = month_results + all_results
+        if len(all_results) >= limit * 2:
+            break
+
+    return all_results[-limit:][::-1]
+
+
+async def get_transaction_by_id(tx_id: str) -> Optional[tuple[int, dict, str]]:
+    """Returns (row_index, row_dict, sheet_name) or None. Searches recent months."""
+    now = now_vn()
+    for i in range(6):
+        if i == 0:
+            month_dt = now
+        else:
+            month_dt = now
+            for _ in range(i):
+                month_dt = _prev_month(month_dt)
+        sheet_name = _month_sheet_name(month_dt)
+        rows = await _safe_get_values(_sr(sheet_name, "A:J"))
+        if not rows:
+            if i > 0:
+                break
             continue
-        if category and d.get("category") != category:
-            continue
-        if amount_min is not None or amount_max is not None:
-            try:
-                amt = int(float(str(d.get("amount", 0))))
-            except (ValueError, TypeError):
-                amt = 0
-            if amount_min is not None and amt < amount_min:
-                continue
-            if amount_max is not None and amt > amount_max:
-                continue
-        results.append(d)
-
-    return results[-limit:][::-1]
-
-
-async def get_transaction_by_id(tx_id: str) -> Optional[tuple[int, dict]]:
-    rows = await _get_values("Transactions!A:J")
-    if not rows:
-        return None
-    for i, row in enumerate(rows[1:], start=2):
-        row = _pad_row(row, len(TRANSACTIONS_HEADER))
-        if row[COL_ID] == tx_id:
-            return i, dict(zip(TRANSACTIONS_HEADER, row))
+        for j, row in enumerate(rows[1:], start=2):
+            row = _pad_row(row, len(TRANSACTIONS_HEADER))
+            if row[COL_ID] == tx_id:
+                return j, dict(zip(TRANSACTIONS_HEADER, row)), sheet_name
     return None
 
 
@@ -410,10 +542,9 @@ async def update_transaction_field(tx_id: str, field: str, value) -> bool:
     result = await get_transaction_by_id(tx_id)
     if not result:
         return False
-    row_idx, _ = result
-
+    row_idx, _, sheet_name = result
     col_letter = chr(ord('A') + col)
-    await _set_values(f"Transactions!{col_letter}{row_idx}", [[value]])
+    await _set_values(_sr(sheet_name, f"{col_letter}{row_idx}"), [[value]])
     return True
 
 
@@ -421,9 +552,9 @@ async def delete_transaction(tx_id: str) -> bool:
     result = await get_transaction_by_id(tx_id)
     if not result:
         return False
-    row_idx, _ = result
-    gid = await _get_sheet_gid("Transactions")
-    await _delete_row(gid, row_idx - 1)  # convert to 0-based
+    row_idx, _, sheet_name = result
+    gid = await _get_sheet_gid(sheet_name)
+    await _delete_row(gid, row_idx - 1)
     return True
 
 
@@ -432,22 +563,22 @@ async def get_transactions_range(
     end: datetime,
     user_id: Optional[str] = None,
 ) -> list[dict]:
-    rows = await _get_values("Transactions!A:J")
-    if not rows or rows[0] != TRANSACTIONS_HEADER:
-        return []
-
+    """Read transactions across all monthly sheets in the date range."""
+    sheet_names = _months_in_range(start, end)
     results = []
-    for row in rows[1:]:
-        row = _pad_row(row, len(TRANSACTIONS_HEADER))
-        d = dict(zip(TRANSACTIONS_HEADER, row))
-        ts = parse_ts(d.get("timestamp", ""))
-        if not ts:
+    for sheet_name in sheet_names:
+        rows = await _safe_get_values(_sr(sheet_name, "A:J"))
+        if not rows or rows[0] != TRANSACTIONS_HEADER:
             continue
-        if ts < start or ts > end:
-            continue
-        if user_id and d.get("user") != str(user_id):
-            continue
-        results.append(d)
+        for row in rows[1:]:
+            row = _pad_row(row, len(TRANSACTIONS_HEADER))
+            d = dict(zip(TRANSACTIONS_HEADER, row))
+            ts = parse_ts(d.get("timestamp", ""))
+            if not ts or ts < start or ts > end:
+                continue
+            if user_id and d.get("user") != str(user_id):
+                continue
+            results.append(d)
     return results
 
 

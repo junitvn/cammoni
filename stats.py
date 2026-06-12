@@ -172,7 +172,11 @@ def format_top_text(rows: list, period_label: str, limit: int = 10) -> str:
 
 def format_stats_text(stats: dict) -> str:
     lines = []
-    period_label = PERIODS.get(stats["period"], "Khoảng thời gian")
+    if stats["period"] == "month" and stats.get("start"):
+        s = stats["start"]
+        period_label = f"Tháng {s.month}/{s.year}"
+    else:
+        period_label = PERIODS.get(stats["period"], "Khoảng thời gian")
     lines.append(f"📊 *{period_label}*")
     lines.append(f"💸 Chi: {format_amount(stats['total_chi'])}")
     lines.append(f"💰 Thu: {format_amount(stats['total_thu'])}")
