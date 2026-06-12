@@ -941,8 +941,9 @@ async def handle_qexcl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     old_text = query.message.text or ""
-    lines = [l for l in old_text.split("\n") if not l.startswith("🚫") and not l.startswith("✅ Đã tính")]
-    base = "\n".join(lines)
+    skip_prefixes = ("🚫", "✅ Đã tính", "🔴", "⚠️")
+    lines = [l for l in old_text.split("\n") if not any(l.startswith(p) for p in skip_prefixes)]
+    base = "\n".join(lines).rstrip()
     if new_val == "Y":
         await query.edit_message_text(f"{base}\n🚫 _Không tính vào ngân sách_", parse_mode="Markdown")
     else:

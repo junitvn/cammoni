@@ -227,6 +227,8 @@ async def check_budget_warning(category: str, added_amount: int) -> Optional[str
     monthly_total = 0
     monthly_by_cat: dict[str, int] = {k: 0 for k in CATEGORY_KEYS}
     for row in all_rows:
+        if str(row.get("excluded", "")).strip().upper() == "Y":
+            continue
         if str(row.get("type", "chi")) == "chi":
             try:
                 amt = int(row.get("amount", 0))
