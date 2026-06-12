@@ -1311,7 +1311,7 @@ def main() -> None:
     if job_queue:
         job_queue.run_daily(
             daily_reminder,
-            time=dtime(hour=10, minute=0, tzinfo=TZ),
+            time=dtime(hour=22, minute=0, tzinfo=TZ),
         )
 
     app.add_error_handler(error_handler)
