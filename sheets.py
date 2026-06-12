@@ -9,6 +9,7 @@ import logging
 import time
 from datetime import datetime
 from typing import Optional
+from urllib.parse import quote as _url_quote
 from zoneinfo import ZoneInfo
 
 import time
@@ -155,6 +156,23 @@ async def init_sheets() -> None:
 
     current_month = _month_sheet_name()
 
+    now = datetime.now(TZ)
+    old_slash_name = f"T{now.month}/{now.year}"  # old format with slash
+
+    # One-time migration: rename old slash-format sheet T6/2026 → T6.2026
+    if old_slash_name in existing_titles and current_month not in existing_titles:
+        r = await client.post(
+            f"{SHEETS_BASE}/{sheet_id}:batchUpdate",
+            headers=await _auth_headers(),
+            json={"requests": [{"updateSheetProperties": {
+                "properties": {"sheetId": existing_titles[old_slash_name], "title": current_month},
+                "fields": "title",
+            }}]},
+        )
+        r.raise_for_status()
+        existing_titles[current_month] = existing_titles.pop(old_slash_name)
+        logger.info(f"[sheets] renamed '{old_slash_name}' → '{current_month}'")
+
     # One-time migration: rename legacy "Transactions" → current month sheet
     if "Transactions" in existing_titles and current_month not in existing_titles:
         r = await client.post(
@@ -218,11 +236,16 @@ async def init_sheets() -> None:
 
 # ── Low-level helpers ─────────────────────────────────────────────────────────
 
+def _enc(range_: str) -> str:
+    """URL-encode a Sheets range for safe use in URL paths (preserves ! and :)."""
+    return _url_quote(range_, safe="!:")
+
+
 async def _get_values(range_: str) -> list[list]:
     sheet_id = _sheet_id()
     client = get_httpx_client()
     r = await client.get(
-        f"{SHEETS_BASE}/{sheet_id}/values/{range_}",
+        f"{SHEETS_BASE}/{sheet_id}/values/{_enc(range_)}",
         headers=await _auth_headers(),
     )
     r.raise_for_status()
@@ -233,7 +256,7 @@ async def _append_values(range_: str, values: list[list]) -> None:
     sheet_id = _sheet_id()
     client = get_httpx_client()
     r = await client.post(
-        f"{SHEETS_BASE}/{sheet_id}/values/{range_}:append",
+        f"{SHEETS_BASE}/{sheet_id}/values/{_enc(range_)}:append",
         headers=await _auth_headers(),
         params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
         json={"values": values},
@@ -245,7 +268,7 @@ async def _set_values(range_: str, values: list[list]) -> None:
     sheet_id = _sheet_id()
     client = get_httpx_client()
     r = await client.put(
-        f"{SHEETS_BASE}/{sheet_id}/values/{range_}",
+        f"{SHEETS_BASE}/{sheet_id}/values/{_enc(range_)}",
         headers=await _auth_headers(),
         params={"valueInputOption": "RAW"},
         json={"values": values},
@@ -292,9 +315,9 @@ _known_month_sheets: set[str] = set()
 
 
 def _month_sheet_name(dt: Optional[datetime] = None) -> str:
-    """Sheet name for a given month, e.g. 'T6/2026'."""
+    """Sheet name for a given month, e.g. 'T6.2026'."""
     dt = dt or datetime.now(TZ)
-    return f"T{dt.month}/{dt.year}"
+    return f"T{dt.month}.{dt.year}"
 
 
 def _prev_month(dt: datetime) -> datetime:
