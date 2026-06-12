@@ -184,11 +184,12 @@ def format_stats_text(stats: dict) -> str:
     else:
         period_label = PERIODS.get(stats["period"], "Khoảng thời gian")
     lines.append(f"📊 *{period_label}*")
+    lines.append(f"💰 Thu nhập: {format_amount(stats['total_thu'])}")
     lines.append(f"💸 Chi: {format_amount(stats['total_chi'])}")
     excluded_chi = stats.get("total_excluded_chi", 0)
     if excluded_chi:
         lines.append(f"🚫 Chi ngoài ngân sách: {format_amount(excluded_chi)}")
-    lines.append(f"💰 Thu: {format_amount(stats['total_thu'])}")
+        lines.append(f"📦 Tổng chi: {format_amount(stats['total_chi'] + excluded_chi)}")
     so_du = stats["so_du"]
     if so_du >= 0:
         so_du_str = f"+{format_amount(so_du)}"
