@@ -1095,8 +1095,8 @@ def _tx_list_line(row: dict) -> str:
     info = CATEGORY_INFO.get(cat, {"emoji": "📦"})
     desc = str(row.get("description", ""))
     name = user_store.get_name(row.get("user", ""))
-    name_str = f"{name} " if name else ""
-    return f"  {amt:<15}{info['emoji']} {name_str}{desc}"
+    inner = f"{info['emoji']} • {name} • {desc}" if name else f"{info['emoji']} • {desc}"
+    return f"  {amt:<15}{inner}"
 
 
 def _sort_rows_grouped(rows: list) -> list:
@@ -1475,6 +1475,8 @@ async def _post_init(app) -> None:
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if "Message is not modified" in str(context.error):
+        return
     logger.exception("Unhandled exception", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
         await update.effective_message.reply_text(

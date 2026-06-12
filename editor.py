@@ -19,6 +19,31 @@ from sheets import parse_ts as _parse_ts
 import users as user_store
 
 
+def _tx_detail_text(row: dict) -> str:
+    tx_type = str(row.get("type", "chi"))
+    type_icon = "💰" if tx_type == "thu" else "💸"
+    try:
+        amt = format_amount(int(float(str(row.get("amount", 0)))))
+    except (ValueError, TypeError):
+        amt = "?"
+    cat = str(row.get("category", "khac"))
+    cat_info = CATEGORY_INFO.get(cat, {"emoji": "📦", "name": cat})
+    desc = str(row.get("description", ""))
+    name = user_store.get_name(row.get("user", ""))
+    ts_str = str(row.get("timestamp", ""))[:16]
+    excl = str(row.get("excluded", "")).strip().upper() == "Y"
+    lines = [
+        f"{type_icon} *{amt}* — {cat_info['emoji']} {cat_info['name']}",
+        f'📝 "{desc}"',
+        f"📅 {ts_str}",
+    ]
+    if name:
+        lines.append(f"👤 _{name}_")
+    if excl:
+        lines.append("🚫 _Không tính vào ngân sách_")
+    return "\n".join(lines)
+
+
 def _find_category_key(query: str) -> Optional[str]:
     q = normalize_vn(query.lower())
     for key, info in CATEGORY_INFO.items():
@@ -163,10 +188,13 @@ async def edit_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return EDIT_LIST
 
     if data.startswith("editback_"):
-        # Restore the list page — offset encoded in callback data
         offset = int(data.replace("editback_", ""))
         rows = context.user_data.get("edit_all_rows", [])
-        await query.edit_message_reply_markup(reply_markup=_page_markup(rows, offset))
+        search_label = context.user_data.get("edit_search_label", "")
+        total = len(rows)
+        shown = min(offset + PAGE_SIZE, total)
+        header = f"🔍 *\"{search_label}\":* ({shown}/{total})" if search_label else f"📋 *Các khoản gần đây:* ({shown}/{total})"
+        await query.edit_message_text(header, reply_markup=_page_markup(rows, offset), parse_mode="Markdown")
         return EDIT_LIST
 
     if data.startswith("editpick_"):
@@ -195,7 +223,7 @@ async def edit_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 InlineKeyboardButton("❌ Hủy", callback_data=f"editback_{page_offset}"),
             ],
         ])
-        await query.edit_message_reply_markup(reply_markup=keyboard)
+        await query.edit_message_text(_tx_detail_text(row), reply_markup=keyboard, parse_mode="Markdown")
         return EDIT_LIST
 
     if data.startswith("editfields_"):
@@ -205,8 +233,7 @@ async def edit_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["edit_tx_id"] = tx_id
         context.user_data["edit_return_offset"] = page_offset
         row = context.user_data.get("edit_rows", {}).get(tx_id, {})
-        desc = str(row.get("description", ""))[:25]
-        header = f'✏️ *{desc}*\nChọn trường cần sửa:' if desc else "✏️ Chọn trường cần sửa:"
+        header = f"{_tx_detail_text(row)}\n\n✏️ Chọn trường cần sửa:"
         keyboard = [
             [
                 InlineKeyboardButton("💰 Số tiền", callback_data="field_amount"),
