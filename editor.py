@@ -82,7 +82,7 @@ def _transaction_line(row: dict) -> str:
 
 
 def _page_markup(rows: list, offset: int) -> InlineKeyboardMarkup:
-    """Build inline keyboard: one button per item + Load thêm."""
+    """Build inline keyboard: one button per item + Xem thêm."""
     page = rows[offset:offset + PAGE_SIZE]
     total = len(rows)
     shown = min(offset + PAGE_SIZE, total)
@@ -95,7 +95,7 @@ def _page_markup(rows: list, offset: int) -> InlineKeyboardMarkup:
         )])
     if shown < total:
         keyboard.append([InlineKeyboardButton(
-            f"⬇️ Load thêm ({total - shown} còn lại)",
+            f"⬇️ Xem thêm ({total - shown})",
             callback_data=f"editmore_{shown}",
         )])
     return InlineKeyboardMarkup(keyboard)

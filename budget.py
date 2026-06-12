@@ -11,6 +11,21 @@ from parser import format_amount
 BUDGET_SET_SCOPE, BUDGET_SET_AMOUNT = range(2)
 
 
+async def _budget_summary_text() -> str:
+    from stats import compute_stats
+    stats = await compute_stats("month")
+    budgets = stats.get("budgets", {})
+    if not budgets:
+        return ""
+    lines = []
+    for scope, b in budgets.items():
+        label = "Tổng chi" if scope == "chung" else CATEGORY_INFO.get(scope, {}).get("name", scope)
+        pct = b["pct"]
+        icon = "🔴" if pct >= 100 else ("⚠️" if pct >= 80 else "✅")
+        lines.append(f"{icon} {label}: {format_amount(b['used'])} / {format_amount(b['limit'])} ({pct:.0f}%)")
+    return "\n".join(lines)
+
+
 async def budget_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
         [InlineKeyboardButton("⚙️ Đặt ngân sách chung", callback_data="budget_set_chung")],
@@ -18,7 +33,8 @@ async def budget_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         [InlineKeyboardButton("📊 Xem tình hình ngân sách", callback_data="budget_view")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    msg = "💰 *Quản lý ngân sách*\n\nChọn thao tác:"
+    summary = await _budget_summary_text()
+    msg = f"💰 *Quản lý ngân sách*\n\n{summary}\n\nChọn thao tác:" if summary else "💰 *Quản lý ngân sách*\n\nChọn thao tác:"
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
     else:
