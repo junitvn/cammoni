@@ -24,6 +24,8 @@ Hãy xác định ý định (intent):
   Ví dụ: "đặt ngân sách ăn ngoài 3 triệu", "ngân sách tổng 15 triệu", "set budget xăng xe 500k".
 - "category_filter": người dùng muốn XEM DANH SÁCH THEO DANH MỤC.
   Ví dụ: "xem ăn ngoài", "liệt kê y tế", "danh sách xăng xe tháng này".
+- "stats": người dùng muốn XEM THỐNG KÊ tổng quan.
+  Ví dụ: "hôm nay chi bao nhiêu", "thống kê tuần này", "tháng này tiêu gì", "tháng 5 chi tiêu", "từ ngày 1 đến 10".
 
 Trả về JSON (KHÔNG có markdown):
 
@@ -54,6 +56,13 @@ Nếu intent = "budget":
 
 Nếu intent = "category_filter":
 {"intent": "category_filter", "category": "<category key: an_ngoai|di_cho|bat_buoc|y_te|phuong_tien|dau_tu|khac|luong|thu_khac>"}
+
+Nếu intent = "stats":
+{"intent": "stats", "period": "today"|"week"|"month"|"range",
+ "month": <số tháng nếu không phải tháng hiện tại, else null>,
+ "year": <năm nếu khác năm hiện tại, else null>,
+ "range_start": "<dd hoặc dd/mm hoặc dd/mm/yyyy nếu period=range, else null>",
+ "range_end": "<dd hoặc dd/mm hoặc dd/mm/yyyy nếu period=range, else null>"}
 
 Chỉ trả về JSON, không giải thích."""
 
@@ -99,6 +108,16 @@ async def transcribe_voice(audio_bytes: bytes) -> dict:
 
     if intent == "category_filter":
         return {"intent": "category_filter", "category": str(data.get("category", ""))}
+
+    if intent == "stats":
+        return {
+            "intent": "stats",
+            "period": str(data.get("period", "month")),
+            "month": data.get("month"),
+            "year": data.get("year"),
+            "range_start": data.get("range_start"),
+            "range_end": data.get("range_end"),
+        }
 
     # Parse record intent
     transactions = []

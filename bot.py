@@ -90,7 +90,7 @@ def is_allowed(user_id: int) -> bool:
 # ── Bot commands (shown in Telegram's blue menu button) ──────────────────────
 
 BOT_COMMANDS = [
-    BotCommand("month", "Thống kê tháng này"),
+    BotCommand("month", "Thống kê tháng này (hoặc /month 5 để xem tháng 5)"),
     BotCommand("week", "Thống kê tuần này"),
     BotCommand("today", "Thống kê hôm nay"),
     BotCommand("range", "Thống kê khoảng thời gian"),
@@ -164,7 +164,23 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_thang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update.effective_user.id):
         return
-    await _send_stats(update, context, "month")
+    args = context.args or []
+    if args:
+        try:
+            month = int(args[0])
+            year = int(args[1]) if len(args) > 1 else now_vn().year
+            if not (1 <= month <= 12):
+                raise ValueError
+            start = datetime(year, month, 1, tzinfo=TZ)
+            if month == 12:
+                end = datetime(year + 1, 1, 1, tzinfo=TZ) - timedelta(seconds=1)
+            else:
+                end = datetime(year, month + 1, 1, tzinfo=TZ) - timedelta(seconds=1)
+            await _send_stats(update, context, "month", custom_start=start, custom_end=end)
+        except (ValueError, IndexError):
+            await update.message.reply_text("Dùng: `/month 5` hoặc `/month 5 2025`", parse_mode="Markdown")
+    else:
+        await _send_stats(update, context, "month")
 
 async def cmd_tuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update.effective_user.id):
@@ -181,7 +197,11 @@ async def cmd_khoang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     context.user_data["waiting_custom_range"] = True
     await update.message.reply_text(
-        "Nhập khoảng thời gian (VD: `01/06 - 09/06` hoặc `01/06/2025 - 09/06/2025`):",
+        "Nhập khoảng thời gian:\n"
+        "• `3 6` — ngày 3 đến ngày 6 tháng này\n"
+        "• `5/5 6` — ngày 5/5 đến ngày 6 tháng này\n"
+        "• `25/5 3/6` — 25/5 đến 3/6\n"
+        "• `1/6/2025 30/6/2025` — khoảng cụ thể",
         parse_mode="Markdown",
     )
 
@@ -389,6 +409,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         intent = result.get("intent", "record")
         if intent == "search":
             await _handle_voice_search(update, context, msg, result)
+        elif intent == "stats":
+            await _handle_voice_stats(update, context, msg, result)
         elif intent == "budget":
             await _handle_voice_budget(update, context, msg, result)
         elif intent == "category_filter":
@@ -457,6 +479,68 @@ async def _handle_voice_search(
     await msg.edit_text(
         _format_txlist_grouped(rows_desc, shown, f"🔍 {label}"),
         reply_markup=_txlist_keyboard(uid, shown, total),
+        parse_mode="Markdown",
+    )
+
+
+async def _handle_voice_stats(update, context, msg, result: dict) -> None:
+    from stats import compute_stats, format_stats_text, PERIODS
+    period = str(result.get("period", "month"))
+    custom_start = custom_end = None
+
+    if period == "range":
+        ref = now_vn()
+        rs = result.get("range_start") or ""
+        re_ = result.get("range_end") or ""
+        custom_start = _parse_date_token(rs, ref) if rs else None
+        custom_end = _parse_date_token(re_, ref) if re_ else None
+        if not custom_start or not custom_end:
+            await msg.edit_text("❓ Không nhận ra khoảng thời gian.")
+            return
+        if custom_end < custom_start:
+            custom_start, custom_end = custom_end, custom_start
+        custom_end = custom_end.replace(hour=23, minute=59, second=59)
+    elif period == "month" and result.get("month"):
+        try:
+            month = int(result["month"])
+            year = int(result["year"]) if result.get("year") else now_vn().year
+            custom_start = datetime(year, month, 1, tzinfo=TZ)
+            if month == 12:
+                custom_end = datetime(year + 1, 1, 1, tzinfo=TZ) - timedelta(seconds=1)
+            else:
+                custom_end = datetime(year, month + 1, 1, tzinfo=TZ) - timedelta(seconds=1)
+        except (ValueError, TypeError):
+            pass
+
+    uid = update.effective_user.id
+    try:
+        stats = await compute_stats(period, custom_start=custom_start, custom_end=custom_end)
+    except Exception as e:
+        await msg.edit_text(f"❌ Lỗi thống kê: {e}")
+        return
+
+    has_data = stats["total_chi"] > 0 or stats["total_thu"] > 0
+    if has_data:
+        _s = stats.get("start")
+        if period == "month" and _s:
+            _lbl = f"Tháng {_s.month}/{_s.year}"
+        elif period in PERIODS:
+            _lbl = PERIODS[period]
+        elif _s:
+            _lbl = f"{format_ts(_s)[:5]}-{format_ts(stats['end'])[:5]}"
+        else:
+            _lbl = "Thống kê"
+        context.user_data[f"txlist_rows_{uid}"] = list(reversed(stats["transactions"]))
+        context.user_data[f"txlist_label_{uid}"] = _lbl
+        context.user_data[f"txlist_offset_{uid}"] = min(_PAGE_SIZE, len(stats["transactions"]))
+        context.user_data[f"chart_params_{uid}"] = {
+            "period": period, "custom_start": custom_start,
+            "custom_end": custom_end, "filter_uid": None,
+        }
+
+    await msg.edit_text(
+        format_stats_text(stats),
+        reply_markup=_stats_keyboard(period, uid, has_data),
         parse_mode="Markdown",
     )
 
@@ -919,29 +1003,41 @@ async def handle_stats_keyboard(update: Update, context: ContextTypes.DEFAULT_TY
         await _handle_custom_range(update, context, text)
 
 
+def _parse_date_token(token: str, ref: datetime) -> Optional[datetime]:
+    """Parse 'dd', 'dd/mm', or 'dd/mm/yyyy' relative to ref month/year."""
+    token = token.strip()
+    parts = re.split(r"[/\-]", token)
+    try:
+        day = int(parts[0])
+        month = int(parts[1]) if len(parts) > 1 else ref.month
+        year = int(parts[2]) if len(parts) > 2 else ref.year
+        return datetime(year, month, day, tzinfo=TZ)
+    except (ValueError, IndexError):
+        return None
+
+
 async def _handle_custom_range(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
-    from sheets import parse_ts
-    import re
-    # Expect "DD/MM - DD/MM" or "DD/MM/YYYY - DD/MM/YYYY"
-    parts = re.split(r"\s*[-–]\s*", text.strip())
-    if len(parts) != 2:
-        await update.message.reply_text("Không nhận ra định dạng. Thử: `01/06 - 09/06`", parse_mode="Markdown")
+    ref = now_vn()
+    # Remove separators (dash, en-dash, 'đến', 'to') then split on whitespace
+    cleaned = re.sub(r"\s*[-–]\s*", " ", text.strip())
+    tokens = [t for t in cleaned.split() if t not in ("đến", "tới", "to")]
+
+    if len(tokens) < 2:
+        await update.message.reply_text(
+            "Nhập 2 mốc thời gian. VD: `3 6` hoặc `5/5 6` hoặc `25/5 3/6`",
+            parse_mode="Markdown",
+        )
         return
 
-    start = parse_ts(parts[0].strip())
-    end = parse_ts(parts[1].strip())
+    start = _parse_date_token(tokens[0], ref)
+    end = _parse_date_token(tokens[1], ref)
     if not start or not end:
-        await update.message.reply_text("Không nhận ra ngày. Thử: `01/06 - 09/06`", parse_mode="Markdown")
+        await update.message.reply_text("Không nhận ra ngày. VD: `3 6` hoặc `5/5 6`", parse_mode="Markdown")
         return
 
     if end < start:
         start, end = end, start
-
-    from zoneinfo import ZoneInfo
-    tz = ZoneInfo("Asia/Ho_Chi_Minh")
     end = end.replace(hour=23, minute=59, second=59)
-
-    user_id = str(update.effective_user.id)
     await _send_stats(update, context, "custom", custom_start=start, custom_end=end)
 
 
@@ -1060,8 +1156,19 @@ async def _send_stats(
             "period": period, "custom_start": custom_start,
             "custom_end": custom_end, "filter_uid": None,
         }
-        context.user_data[f"txlist_rows_{uid}"] = _sort_rows_grouped(stats["transactions"])
-        context.user_data[f"txlist_label_{uid}"] = PERIODS.get(period, "Khoảng")
+        # Store rows for Danh sách view (newest first)
+        context.user_data[f"txlist_rows_{uid}"] = list(reversed(stats["transactions"]))
+        # Derive a good label: show month/year for monthly stats
+        _s = stats.get("start")
+        if period == "month" and _s:
+            _txlabel = f"Tháng {_s.month}/{_s.year}"
+        elif period in PERIODS:
+            _txlabel = PERIODS[period]
+        elif _s:
+            _txlabel = f"{format_ts(_s)[:5]}-{format_ts(stats['end'])[:5]}"
+        else:
+            _txlabel = "Khoảng"
+        context.user_data[f"txlist_label_{uid}"] = _txlabel
 
     await msg.edit_text(
         format_stats_text(stats),
