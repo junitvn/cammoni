@@ -7,6 +7,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timedelta, time as dtime
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
