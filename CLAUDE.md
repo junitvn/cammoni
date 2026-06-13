@@ -2,6 +2,10 @@
 
 Telegram bot ghi chép thu chi gia đình, lưu vào Google Sheets, phân loại bằng Gemini AI.
 
+## Quy tắc làm việc
+
+Sau mỗi lần sửa code, **luôn commit và push lên main** ngay mà không cần người dùng nhắc.
+
 ## Deploy
 
 > **Lưu ý quan trọng**: Nếu `git push` thất bại do mạng bị chặn (Connection closed, Could not read from remote repository), **KHÔNG** copy file thủ công lên server. Chỉ báo cho người dùng biết để họ tự xử lý (đổi mạng, VPN, v.v.).
