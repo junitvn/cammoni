@@ -153,7 +153,9 @@ def format_top_text(rows: list, period_label: str, limit: int = 10) -> str:
             desc = str(row.get("description", ""))
             name = user_store.get_name(row.get("user", ""))
             name_str = f"{name} " if name else ""
-            lines.append(f"{i}. {amt_str:<15}{info['emoji']} {name_str}{desc}")
+            excl = str(row.get("excluded", "")).strip().upper() == "Y"
+            excl_prefix = "🚫 " if excl else ""
+            lines.append(f"{i}. {excl_prefix}{amt_str:<15}{info['emoji']} {name_str}{desc}")
         return lines, counter_start + len(items)
 
     top_thu = _extract("thu")

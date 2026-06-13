@@ -78,7 +78,9 @@ def _transaction_line(row: dict) -> str:
     desc = str(row.get("description", ""))
     name = user_store.get_name(row.get("user", ""))
     name_part = f" · {name}" if name else ""
-    return f"{type_icon} {ts} · {amt} · {info['emoji']} {desc}{name_part}"
+    excl = str(row.get("excluded", "")).strip().upper() == "Y"
+    excl_prefix = "🚫 " if excl else ""
+    return f"{type_icon} {ts} · {excl_prefix}{amt} · {info['emoji']} {desc}{name_part}"
 
 
 def _page_markup(rows: list, offset: int) -> InlineKeyboardMarkup:
