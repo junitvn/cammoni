@@ -83,6 +83,19 @@ def _load_allowed_users_from_yaml() -> set[int]:
 ALLOWED_USERS: set[int] = _load_allowed_users_from_env()
 
 
+def _load_reminder_users() -> set[int]:
+    env_ids = os.getenv("REMINDER_USERS", "").strip()
+    if env_ids:
+        try:
+            return {int(i.strip()) for i in env_ids.split(",") if i.strip()}
+        except ValueError:
+            pass
+    return set()
+
+
+REMINDER_USERS: set[int] = _load_reminder_users()
+
+
 def is_allowed(user_id: int) -> bool:
     if not ALLOWED_USERS:
         return True  # no whitelist configured → allow all
@@ -1301,7 +1314,7 @@ async def handle_chart_callback(update: Update, context: ContextTypes.DEFAULT_TY
 # ── World Cup scores ───────────────────────────────────────────────────────────
 
 async def cmd_worldcup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _is_allowed(update):
+    if not is_allowed(update.effective_user.id):
         return
     date_arg = None
     if context.args:
@@ -1333,21 +1346,19 @@ async def worldcup_morning(context: ContextTypes.DEFAULT_TYPE) -> None:
 # ── Daily reminder ─────────────────────────────────────────────────────────────
 
 async def daily_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not ALLOWED_USERS:
+    targets = REMINDER_USERS or ALLOWED_USERS
+    if not targets:
         return
 
-    stats = compute_stats("today")
     yesterday_text = ""
     try:
-        from datetime import timedelta
-        from sheets import now_vn
-        yesterday_stats = compute_stats("today")  # simplified; for full yesterday use custom range
+        yesterday_stats = compute_stats("today")
         if yesterday_stats["total_chi"] > 0:
             yesterday_text = f"\nHôm qua chi: {format_amount(yesterday_stats['total_chi'])}"
     except Exception:
         pass
 
-    for user_id in ALLOWED_USERS:
+    for user_id in targets:
         try:
             await context.bot.send_message(
                 chat_id=user_id,
