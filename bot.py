@@ -37,6 +37,7 @@ from stats import compute_stats, format_stats_text, check_budget_warning, format
 from charts import generate_charts
 from editor import get_editor_conversation_handler
 from budget import get_budget_conversation_handler, budget_menu
+from worldcup import fetch_worldcup_scores
 
 load_dotenv()
 logging.basicConfig(
@@ -98,6 +99,7 @@ BOT_COMMANDS = [
     BotCommand("topmonth", "Top chi tiêu tháng này"),
     BotCommand("topweek", "Top chi tiêu tuần này"),
     BotCommand("budget", "Quản lý ngân sách"),
+    BotCommand("worldcup", "Kết quả World Cup hôm qua (hoặc /worldcup YYYY-MM-DD)"),
     BotCommand("edit", "Sửa hoặc xóa giao dịch"),
     BotCommand("search", "Tìm theo từ khoá hoặc khoảng tiền"),
     BotCommand("menu", "Tất cả tùy chọn thống kê"),
@@ -1296,6 +1298,38 @@ async def handle_chart_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.message.reply_text(f"❌ Lỗi tạo biểu đồ: {e}")
 
 
+# ── World Cup scores ───────────────────────────────────────────────────────────
+
+async def cmd_worldcup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_allowed(update):
+        return
+    date_arg = None
+    if context.args:
+        try:
+            from datetime import date
+            date_arg = date.fromisoformat(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Dùng: /worldcup hoặc /worldcup YYYY-MM-DD")
+            return
+    text = await fetch_worldcup_scores(date_arg)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def worldcup_morning(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not ALLOWED_USERS:
+        return
+    text = await fetch_worldcup_scores()
+    for user_id in ALLOWED_USERS:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=text,
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.warning(f"Could not send worldcup scores to {user_id}: {e}")
+
+
 # ── Daily reminder ─────────────────────────────────────────────────────────────
 
 async def daily_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1347,6 +1381,7 @@ def main() -> None:
     app.add_handler(CommandHandler("topmonth", cmd_topthang))
     app.add_handler(CommandHandler("topweek", cmd_toptuan))
     app.add_handler(CommandHandler("budget", cmd_ngansach))
+    app.add_handler(CommandHandler("worldcup", cmd_worldcup))
 
     # Conversation handlers (must be added before generic handlers)
     app.add_handler(get_editor_conversation_handler())
@@ -1378,12 +1413,17 @@ def main() -> None:
     # Voice message transcription
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
-    # Daily reminder at 10:00 Asia/Ho_Chi_Minh
     job_queue = app.job_queue
     if job_queue:
+        # Daily reminder at 10:00 Asia/Ho_Chi_Minh
         job_queue.run_daily(
             daily_reminder,
             time=dtime(hour=22, minute=0, tzinfo=TZ),
+        )
+        # World Cup scores at 07:00 Asia/Ho_Chi_Minh
+        job_queue.run_daily(
+            worldcup_morning,
+            time=dtime(hour=7, minute=0, tzinfo=TZ),
         )
 
     app.add_error_handler(error_handler)
