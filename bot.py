@@ -1322,10 +1322,10 @@ async def cmd_worldcup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             from datetime import date
             date_arg = date.fromisoformat(context.args[0])
         except ValueError:
-            await update.message.reply_text("Dùng: /worldcup hoặc /worldcup YYYY-MM-DD")
+            await update.effective_message.reply_text("Dùng: /worldcup hoặc /worldcup YYYY-MM-DD")
             return
     text = await fetch_worldcup_scores(date_arg)
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.effective_message.reply_text(text, parse_mode="Markdown")
 
 
 async def worldcup_morning(context: ContextTypes.DEFAULT_TYPE) -> None:
