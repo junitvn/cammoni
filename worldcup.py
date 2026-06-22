@@ -50,15 +50,23 @@ async def fetch_worldcup_scores(target_date: date | None = None) -> str:
             )
             if resp.status_code == 404:
                 return f"⚽ Không tìm thấy dữ liệu World Cup ngày {date_str}."
-            if resp.status_code == 403:
+            if resp.status_code in (401, 403):
                 return "⚽ API key không hợp lệ hoặc chưa được kích hoạt."
+            if resp.status_code == 429:
+                return "⚽ Đã đạt giới hạn API hôm nay, thử lại ngày mai."
+            if resp.status_code >= 500:
+                logger.error(f"worldcup API server error {resp.status_code}: {resp.text[:200]}")
+                return "⚽ Server football-data.org tạm thời gặp sự cố. Thử lại sau ít phút."
             resp.raise_for_status()
             data = resp.json()
     except httpx.TimeoutException:
         return "⚽ Timeout khi lấy kết quả World Cup."
+    except httpx.HTTPStatusError as e:
+        logger.error(f"worldcup HTTP error: {e}")
+        return "⚽ Lỗi kết nối tới football-data.org. Thử lại sau."
     except Exception as e:
         logger.error(f"worldcup fetch error: {e}")
-        return f"⚽ Lỗi lấy kết quả World Cup: {e}"
+        return "⚽ Không lấy được kết quả World Cup. Thử lại sau."
 
     matches = data.get("matches", [])
     if not matches:
