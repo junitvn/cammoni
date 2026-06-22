@@ -105,6 +105,7 @@ def is_allowed(user_id: int) -> bool:
 # ── Bot commands (shown in Telegram's blue menu button) ──────────────────────
 
 BOT_COMMANDS = [
+    BotCommand("worldcup", "Kết quả World Cup hôm qua (hoặc /worldcup YYYY-MM-DD)"),
     BotCommand("month", "Thống kê tháng này (hoặc /month 5 để xem tháng 5)"),
     BotCommand("week", "Thống kê tuần này"),
     BotCommand("today", "Thống kê hôm nay"),
@@ -112,7 +113,6 @@ BOT_COMMANDS = [
     BotCommand("topmonth", "Top chi tiêu tháng này"),
     BotCommand("topweek", "Top chi tiêu tuần này"),
     BotCommand("budget", "Quản lý ngân sách"),
-    BotCommand("worldcup", "Kết quả World Cup hôm qua (hoặc /worldcup YYYY-MM-DD)"),
     BotCommand("edit", "Sửa hoặc xóa giao dịch"),
     BotCommand("search", "Tìm theo từ khoá hoặc khoảng tiền"),
     BotCommand("menu", "Tất cả tùy chọn thống kê"),
