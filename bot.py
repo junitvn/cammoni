@@ -1329,10 +1329,14 @@ async def cmd_worldcup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def worldcup_morning(context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not ALLOWED_USERS:
+    targets = REMINDER_USERS or ALLOWED_USERS
+    if not targets:
         return
     text = await fetch_worldcup_scores()
-    for user_id in ALLOWED_USERS:
+    if not text or not text.startswith("⚽ *"):
+        logger.warning(f"worldcup_morning: no match data to send — {text!r}")
+        return
+    for user_id in targets:
         try:
             await context.bot.send_message(
                 chat_id=user_id,

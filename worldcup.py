@@ -61,6 +61,9 @@ async def fetch_worldcup_scores(target_date: date | None = None) -> str:
             data = resp.json()
     except httpx.TimeoutException:
         return "⚽ Timeout khi lấy kết quả World Cup."
+    except httpx.ConnectError as e:
+        logger.error(f"worldcup connection error: {e}")
+        return "⚽ Lỗi kết nối tới football-data.org. Thử lại sau."
     except httpx.HTTPStatusError as e:
         logger.error(f"worldcup HTTP error: {e}")
         return "⚽ Lỗi kết nối tới football-data.org. Thử lại sau."
