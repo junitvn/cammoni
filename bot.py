@@ -121,14 +121,17 @@ BOT_COMMANDS = [
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
 
-MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [
+def _main_keyboard(user_id: int | None = None) -> ReplyKeyboardMarkup:
+    rows = [
         [KeyboardButton("🗓 Tháng này"), KeyboardButton("🏆 Top tháng")],
         [KeyboardButton("💰 Ngân sách"), KeyboardButton("✏️ Sửa/Xóa")],
-    ],
-    resize_keyboard=True,
-    is_persistent=True,
-)
+    ]
+    if user_id is not None and user_id in (REMINDER_USERS or ALLOWED_USERS):
+        rows.append([KeyboardButton("⚽ World Cup")])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
+
+
+MAIN_KEYBOARD = _main_keyboard()
 
 MENU_KEYBOARD = InlineKeyboardMarkup([
     [InlineKeyboardButton("📊 Hôm nay", callback_data="menu_today"),
@@ -167,7 +170,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Có thể dùng voice chat để ghi lại giao dịch, tìm kiếm hoặc thiết lập ngân sách.\n\n"
         "Dùng menu bên dưới để xem thống kê.",
         parse_mode="Markdown",
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=_main_keyboard(update.effective_user.id),
     )
 
 
@@ -979,6 +982,8 @@ async def handle_stats_keyboard(update: Update, context: ContextTypes.DEFAULT_TY
         await _send_top(update, context, "month")
     elif text == "💰 Ngân sách":
         await budget_menu(update, context)
+    elif text == "⚽ World Cup":
+        await cmd_worldcup(update, context)
     elif context.user_data.get("waiting_custom_range"):
         context.user_data["waiting_custom_range"] = False
         await _handle_custom_range(update, context, text)
@@ -1367,6 +1372,7 @@ async def daily_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(
                 chat_id=user_id,
                 text=f"☀️ 10h rồi! Hôm nay còn khoản chi nào chưa ghi không? Nhắn ngay nhé.{yesterday_text}",
+                reply_markup=_main_keyboard(user_id),
             )
         except Exception as e:
             logger.warning(f"Could not send reminder to {user_id}: {e}")
@@ -1514,7 +1520,7 @@ async def _combined_text_handler(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning(f"Rejected user {uid} — not in whitelist {ALLOWED_USERS}")
         return
 
-    STATS_BUTTONS = {"🗓 Tháng này", "🏆 Top tháng", "💰 Ngân sách"}
+    STATS_BUTTONS = {"🗓 Tháng này", "🏆 Top tháng", "💰 Ngân sách", "⚽ World Cup"}
 
     if context.user_data.get("edm_waiting"):
         if await handle_edm_text_input(update, context):
