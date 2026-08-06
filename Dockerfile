@@ -9,7 +9,8 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY webapp/requirements.txt ./webapp-requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -r webapp-requirements.txt
 
 COPY . .
 

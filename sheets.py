@@ -679,6 +679,44 @@ async def load_categories_from_sheet() -> dict:
     return result
 
 
+async def add_category(key: str, name: str, emoji: str, income: bool, keywords: list[str]) -> None:
+    row = [key, name, emoji, "yes" if income else "", ", ".join(keywords)]
+    await _append_values("Categories!A:E", [row])
+    logger.info(f"[sheets] add_category: {key}")
+
+
+async def update_category(
+    key: str,
+    name: Optional[str] = None,
+    emoji: Optional[str] = None,
+    keywords: Optional[list[str]] = None,
+) -> bool:
+    """Patch name/emoji/keywords for an existing category. `key` and `income` are immutable."""
+    rows = await _get_values("Categories!A:E")
+    for i, row in enumerate(rows[1:], start=2):
+        row = _pad_row(row, 5)
+        if row[0] != key:
+            continue
+        new_name = name if name is not None else row[1]
+        new_emoji = emoji if emoji is not None else row[2]
+        new_keywords = ", ".join(keywords) if keywords is not None else row[4]
+        await _set_values(f"Categories!A{i}:E{i}", [[key, new_name, new_emoji, row[3], new_keywords]])
+        return True
+    return False
+
+
+async def delete_category(key: str) -> bool:
+    rows = await _get_values("Categories!A:E")
+    for i, row in enumerate(rows[1:], start=2):
+        row = _pad_row(row, 5)
+        if row[0] == key:
+            gid = await _get_sheet_gid("Categories")
+            await _delete_row(gid, i - 1)
+            logger.info(f"[sheets] delete_category: {key}")
+            return True
+    return False
+
+
 async def load_users_from_sheet() -> set[int]:
     """Load allowed user IDs from the Users sheet."""
     rows = await _get_values("Users!A:B")

@@ -6,3 +6,37 @@ services:
     env_file: .env
     volumes:
       - ./credentials.json:/app/credentials.json:ro
+
+  webapp:
+    build: .
+    container_name: moni-webapp
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - WEBAPP_CORS_ORIGINS=https://155-248-181-32.sslip.io
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+    command: ["python", "-m", "uvicorn", "webapp.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    expose:
+      - "8000"
+    mem_limit: 256m
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: moni-caddy
+    restart: unless-stopped
+    depends_on:
+      - webapp
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./webapp-dist:/srv/webapp-dist:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 64m
+
+volumes:
+  caddy_data:
+  caddy_config:
