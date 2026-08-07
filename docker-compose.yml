@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - WEBAPP_CORS_ORIGINS=https://155-248-181-32.sslip.io
+      - WEBAPP_CORS_ORIGINS=https://cammoni-app.vercel.app
     volumes:
       - ./credentials.json:/app/credentials.json:ro
     command: ["python", "-m", "uvicorn", "webapp.main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -32,7 +32,6 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./webapp-dist:/srv/webapp-dist:ro
       - caddy_data:/data
       - caddy_config:/config
     mem_limit: 64m

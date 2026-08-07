@@ -10,10 +10,14 @@ Sau mỗi lần sửa code, **luôn commit và push lên main** ngay mà không 
 
 > **Lưu ý quan trọng**: Nếu `git push` thất bại do mạng bị chặn (Connection closed, Could not read from remote repository), **KHÔNG** copy file thủ công lên server. Chỉ báo cho người dùng biết để họ tự xử lý (đổi mạng, VPN, v.v.).
 
+Oracle/Docker chỉ chạy Telegram bot + FastAPI backend (`webapp/`). Frontend (repo `moni-app`) deploy riêng trên **Vercel** tại `https://cammoni-app.vercel.app`, Caddy không còn serve static file nữa — chỉ reverse-proxy toàn bộ traffic vào `webapp:8000`.
+
 - **Oracle instance**: `ubuntu@155.248.181.32` (SSH key: `~/.ssh/oracle_bot`)
 - **Deploy**: `ssh -i ~/.ssh/oracle_bot ubuntu@155.248.181.32 "cd moni-bot && git pull && docker compose up --build -d"`
 - **Logs**: `docker logs moni-bot --tail 30`
 - **Restart**: `docker compose restart`
+- Backend API công khai qua `https://155-248-181-32.sslip.io`. moni-app trỏ `VITE_API_BASE_URL` (env var trên Vercel) tới domain này.
+- CORS backend (`WEBAPP_CORS_ORIGINS` trong `docker-compose.yml`) phải khớp origin Vercel (`https://cammoni-app.vercel.app`).
 
 ## Stack
 
