@@ -7,12 +7,15 @@ and checks the resulting Telegram user id against the same whitelist moni-bot us
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 from urllib.parse import parse_qsl
 
 import yaml
 from fastapi import Header, HTTPException
+
+logger = logging.getLogger("webapp.auth")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 MAX_AUTH_AGE_SECONDS = 24 * 60 * 60
@@ -50,7 +53,6 @@ def _validate_init_data(init_data: str) -> dict:
     pairs = parse_qsl(init_data, keep_blank_values=True)
     data = dict(pairs)
     received_hash = data.pop("hash", None)
-    data.pop("signature", None)
     if not received_hash:
         raise HTTPException(401, "Missing hash in initData")
 
@@ -59,6 +61,13 @@ def _validate_init_data(init_data: str) -> dict:
     computed_hash = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(computed_hash, received_hash):
+        without_sig = {k: v for k, v in data.items() if k != "signature"}
+        check_string_no_sig = "\n".join(f"{k}={v}" for k, v in sorted(without_sig.items()))
+        computed_no_sig = hmac.new(secret_key, check_string_no_sig.encode(), hashlib.sha256).hexdigest()
+        logger.warning(
+            "initData signature mismatch\nraw init_data=%r\ncheck_string=%r\ncomputed=%s\ncomputed_no_sig=%s\nreceived=%s",
+            init_data, check_string, computed_hash, computed_no_sig, received_hash,
+        )
         raise HTTPException(401, "Invalid initData signature")
 
     try:
