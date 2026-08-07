@@ -145,9 +145,14 @@ MENU_KEYBOARD = InlineKeyboardMarkup([
 ])
 
 def _action_sheet_kb(tx_id: str) -> InlineKeyboardMarkup:
-    """Single button opening the Mini App directly on this transaction's detail/edit screen."""
+    """Single button opening the Mini App directly on this transaction's detail/edit screen.
+
+    The URL stays at the Mini App root (only `?tx=` differs) — Telegram only reliably
+    injects `tgWebAppData` for the root Mini App URL; deep sub-paths were observed to open
+    with no initData at all. The app reads `tx` on mount and routes client-side instead.
+    """
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✏️ Sửa", web_app=WebAppInfo(url=f"{MINI_APP_URL}/transactions/{tx_id}")),
+        InlineKeyboardButton("✏️ Sửa", web_app=WebAppInfo(url=f"{MINI_APP_URL}/?tx={tx_id}")),
     ]])
 
 
