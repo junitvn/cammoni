@@ -69,3 +69,20 @@ class HomeSummary(BaseModel):
     today: DailyTotals
     month_totals: DailyTotals
     groups: list[TransactionGroup]
+
+
+class CategoryTotal(BaseModel):
+    category: str
+    amount: int
+
+
+class MonthTotals(BaseModel):
+    month: str  # YYYY-MM
+    expense: int
+    income: int
+
+
+class AnalysisSummary(BaseModel):
+    year: str
+    by_category: list[CategoryTotal]
+    monthly: list[MonthTotals]

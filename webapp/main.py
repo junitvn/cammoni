@@ -19,6 +19,7 @@ import classifier
 from sheets import init_sheets, load_categories_from_sheet
 
 from webapp.auth import CurrentUser, get_current_user
+from webapp.routes_analysis import router as analysis_router
 from webapp.routes_categories import router as categories_router
 from webapp.routes_home import router as home_router
 from webapp.routes_transactions import router as transactions_router
@@ -59,3 +60,4 @@ async def me(user: CurrentUser = Depends(get_current_user)):
 app.include_router(categories_router)
 app.include_router(transactions_router)
 app.include_router(home_router)
+app.include_router(analysis_router)

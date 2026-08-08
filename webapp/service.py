@@ -59,6 +59,50 @@ def _day_label(dt: datetime, now: datetime) -> str:
     return dt.strftime("%A, %d.%m.%Y")
 
 
+def _year_bounds(year: str) -> tuple[datetime, datetime]:
+    y = int(year)
+    start = datetime(y, 1, 1, tzinfo=TZ)
+    end = min(datetime(y, 12, 31, 23, 59, 59, tzinfo=TZ), now_vn())
+    return start, end
+
+
+async def get_analysis_summary(year: str) -> dict:
+    """Expense-by-category breakdown and expense/income totals per month, from Jan 1 of `year` through now."""
+    start, end = _year_bounds(year)
+    rows = await get_transactions_range(start, end)
+
+    by_category: dict[str, int] = {}
+    monthly: dict[str, dict[str, int]] = {}
+    for m in range(start.month, end.month + 1):
+        monthly[f"{start.year}-{m:02d}"] = {"expense": 0, "income": 0}
+
+    for row in rows:
+        if str(row.get("excluded", "")).strip().upper() == "Y":
+            continue
+        ts = parse_ts(row.get("timestamp", ""))
+        if not ts:
+            continue
+        try:
+            amt = int(float(row.get("amount", 0)))
+        except (ValueError, TypeError):
+            amt = 0
+        tx_type = row.get("type", "chi")
+        month_key = f"{ts.year}-{ts.month:02d}"
+        bucket = monthly.setdefault(month_key, {"expense": 0, "income": 0})
+        if tx_type == "thu":
+            bucket["income"] += amt
+        else:
+            bucket["expense"] += amt
+            category = row.get("category", "khac")
+            by_category[category] = by_category.get(category, 0) + amt
+
+    return {
+        "year": str(start.year),
+        "by_category": [{"category": k, "amount": v} for k, v in sorted(by_category.items(), key=lambda p: -p[1])],
+        "monthly": [{"month": k, **v} for k, v in sorted(monthly.items())],
+    }
+
+
 async def get_home_summary(month: str) -> dict:
     now = now_vn()
     start, end = _month_bounds(month)
