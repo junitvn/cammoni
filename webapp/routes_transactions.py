@@ -52,7 +52,7 @@ async def create_transaction(body: TransactionCreate, user: CurrentUser = Depend
         description=body.description,
         auto_classified=auto_classified,
         timestamp=timestamp,
-        user_name=user.name,
+        user_name=body.user_name or user.name,
     )
     result = await get_transaction_by_id(tx_id)
     return row_to_out(result[1])
@@ -82,6 +82,8 @@ async def edit_transaction(tx_id: str, body: TransactionUpdate, user: CurrentUse
         await update_transaction_field(tx_id, "timestamp", format_ts(parsed))
     if body.excluded is not None:
         await update_transaction_field(tx_id, "excluded", "Y" if body.excluded else "")
+    if body.user_name is not None:
+        await update_transaction_field(tx_id, "user_name", body.user_name)
 
     result = await get_transaction_by_id(tx_id)
     return row_to_out(result[1])

@@ -42,6 +42,7 @@ class TransactionCreate(BaseModel):
     description: str
     category: Optional[str] = None
     timestamp: Optional[str] = None  # ISO-8601; defaults to now
+    user_name: Optional[str] = None  # defaults to the authenticated user's name
 
 
 class TransactionUpdate(BaseModel):
@@ -50,6 +51,7 @@ class TransactionUpdate(BaseModel):
     description: Optional[str] = None
     timestamp: Optional[str] = None  # ISO-8601
     excluded: Optional[bool] = None
+    user_name: Optional[str] = None
 
 
 class DailyTotals(BaseModel):
