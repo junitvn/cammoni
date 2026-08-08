@@ -59,22 +59,32 @@ def _day_label(dt: datetime, now: datetime) -> str:
     return dt.strftime("%A, %d.%m.%Y")
 
 
-def _year_bounds(year: str) -> tuple[datetime, datetime]:
-    y = int(year)
-    start = datetime(y, 1, 1, tzinfo=TZ)
-    end = min(datetime(y, 12, 31, 23, 59, 59, tzinfo=TZ), now_vn())
-    return start, end
+def _range_bounds(start: str, end: str) -> tuple[datetime, datetime]:
+    """start/end = 'YYYY-MM-DD'; end is clamped to now."""
+    sy, sm, sd = (int(x) for x in start.split("-"))
+    ey, em, ed = (int(x) for x in end.split("-"))
+    start_dt = datetime(sy, sm, sd, tzinfo=TZ)
+    end_dt = min(datetime(ey, em, ed, 23, 59, 59, tzinfo=TZ), now_vn())
+    return start_dt, end_dt
 
 
-async def get_analysis_summary(year: str) -> dict:
-    """Expense-by-category breakdown and expense/income totals per month, from Jan 1 of `year` through now."""
-    start, end = _year_bounds(year)
+def _month_keys(start: datetime, end: datetime) -> list[str]:
+    """Every 'YYYY-MM' from start through end, inclusive, spanning year boundaries."""
+    keys = []
+    y, m = start.year, start.month
+    while (y, m) <= (end.year, end.month):
+        keys.append(f"{y}-{m:02d}")
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return keys
+
+
+async def get_analysis_summary(start: str, end: str) -> dict:
+    """Expense-by-category breakdown and expense/income totals per month, over [start, end]."""
+    start, end = _range_bounds(start, end)
     rows = await get_transactions_range(start, end)
 
     by_category: dict[str, int] = {}
-    monthly: dict[str, dict[str, int]] = {}
-    for m in range(start.month, end.month + 1):
-        monthly[f"{start.year}-{m:02d}"] = {"expense": 0, "income": 0}
+    monthly: dict[str, dict[str, int]] = {k: {"expense": 0, "income": 0} for k in _month_keys(start, end)}
 
     for row in rows:
         if str(row.get("excluded", "")).strip().upper() == "Y":
@@ -97,10 +107,23 @@ async def get_analysis_summary(year: str) -> dict:
             by_category[category] = by_category.get(category, 0) + amt
 
     return {
-        "year": str(start.year),
         "by_category": [{"category": k, "amount": v} for k, v in sorted(by_category.items(), key=lambda p: -p[1])],
         "monthly": [{"month": k, **v} for k, v in sorted(monthly.items())],
     }
+
+
+async def get_category_transactions(category: str, start: str, end: str) -> list[dict]:
+    """Non-excluded, non-income rows for one category, over [start, end], most recent first."""
+    start, end = _range_bounds(start, end)
+    rows = await get_transactions_range(start, end)
+    matching = [
+        row for row in rows
+        if row.get("category") == category
+        and row.get("type", "chi") != "thu"
+        and str(row.get("excluded", "")).strip().upper() != "Y"
+    ]
+    matching.sort(key=lambda r: parse_ts(r.get("timestamp", "")) or start, reverse=True)
+    return matching
 
 
 async def get_home_summary(month: str) -> dict:

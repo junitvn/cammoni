@@ -1,4 +1,6 @@
 """CRUD for transactions — a thin wrapper over sheets.py, reusing the bot's classify() logic."""
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from classifier import EXPENSE_CATEGORY_KEYS, INCOME_CATEGORY_KEYS, classify
@@ -9,9 +11,22 @@ from sheets import (
 
 from webapp.auth import CurrentUser, get_current_user
 from webapp.schemas import TransactionCreate, TransactionOut, TransactionUpdate
-from webapp.service import parse_client_timestamp, row_to_out
+from webapp.service import get_category_transactions, parse_client_timestamp, row_to_out
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
+
+
+@router.get("", response_model=list[TransactionOut])
+async def list_transactions(
+    category: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    user: CurrentUser = Depends(get_current_user),
+):
+    if not category or not start or not end:
+        raise HTTPException(400, "category, start and end are required")
+    rows = await get_category_transactions(category, start, end)
+    return [row_to_out(row) for row in rows]
 
 
 @router.get("/{tx_id}", response_model=TransactionOut)

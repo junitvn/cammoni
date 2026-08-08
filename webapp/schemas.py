@@ -83,6 +83,5 @@ class MonthTotals(BaseModel):
 
 
 class AnalysisSummary(BaseModel):
-    year: str
     by_category: list[CategoryTotal]
     monthly: list[MonthTotals]
