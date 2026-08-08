@@ -56,7 +56,7 @@ def _day_label(dt: datetime, now: datetime) -> str:
         return "Today"
     if d == today - timedelta(days=1):
         return "Yesterday"
-    return dt.strftime("%d.%m.%y")
+    return dt.strftime("%A, %d.%m.%Y")
 
 
 async def get_home_summary(month: str) -> dict:
