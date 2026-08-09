@@ -126,10 +126,7 @@ BOT_COMMANDS = [
 def _main_keyboard(user_id: int | None = None) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton("🗓 Tháng này"), KeyboardButton("🏆 Top tháng")],
-        [KeyboardButton("💰 Ngân sách"), KeyboardButton("✏️ Sửa/Xóa")],
     ]
-    if user_id is not None and user_id in (REMINDER_USERS or ALLOWED_USERS):
-        rows.append([KeyboardButton("⚽ World Cup")])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
@@ -668,10 +665,6 @@ async def handle_stats_keyboard(update: Update, context: ContextTypes.DEFAULT_TY
         await _send_stats(update, context, "month")
     elif text == "🏆 Top tháng":
         await _send_top(update, context, "month")
-    elif text == "💰 Ngân sách":
-        await budget_menu(update, context)
-    elif text == "⚽ World Cup":
-        await cmd_worldcup(update, context)
     elif context.user_data.get("waiting_custom_range"):
         context.user_data["waiting_custom_range"] = False
         await _handle_custom_range(update, context, text)
@@ -1194,7 +1187,7 @@ async def _combined_text_handler(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning(f"Rejected user {uid} — not in whitelist {ALLOWED_USERS}")
         return
 
-    STATS_BUTTONS = {"🗓 Tháng này", "🏆 Top tháng", "💰 Ngân sách", "⚽ World Cup"}
+    STATS_BUTTONS = {"🗓 Tháng này", "🏆 Top tháng"}
 
     if text in STATS_BUTTONS or context.user_data.get("waiting_custom_range"):
         await handle_stats_keyboard(update, context)
