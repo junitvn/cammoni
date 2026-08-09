@@ -107,17 +107,10 @@ def is_allowed(user_id: int) -> bool:
 # ── Bot commands (shown in Telegram's blue menu button) ──────────────────────
 
 BOT_COMMANDS = [
-    BotCommand("worldcup", "Kết quả World Cup hôm qua (hoặc /worldcup YYYY-MM-DD)"),
     BotCommand("month", "Thống kê tháng này (hoặc /month 5 để xem tháng 5)"),
     BotCommand("week", "Thống kê tuần này"),
     BotCommand("today", "Thống kê hôm nay"),
-    BotCommand("range", "Thống kê khoảng thời gian"),
-    BotCommand("topmonth", "Top chi tiêu tháng này"),
-    BotCommand("topweek", "Top chi tiêu tuần này"),
-    BotCommand("budget", "Quản lý ngân sách"),
-    BotCommand("edit", "Sửa hoặc xóa giao dịch"),
     BotCommand("search", "Tìm theo từ khoá hoặc khoảng tiền"),
-    BotCommand("menu", "Tất cả tùy chọn thống kê"),
     BotCommand("start", "Khởi động bot"),
 ]
 
@@ -135,10 +128,6 @@ MAIN_KEYBOARD = _main_keyboard()
 MENU_KEYBOARD = InlineKeyboardMarkup([
     [InlineKeyboardButton("📊 Hôm nay", callback_data="menu_today"),
      InlineKeyboardButton("📅 Tuần này", callback_data="menu_week")],
-    [InlineKeyboardButton("🗓 Tháng này", callback_data="menu_month"),
-     InlineKeyboardButton("📆 Khoảng tg", callback_data="menu_custom")],
-    [InlineKeyboardButton("🏆 Top tuần", callback_data="menu_topweek"),
-     InlineKeyboardButton("🏆 Top tháng", callback_data="menu_topmonth")],
 ])
 
 def _action_sheet_kb(tx_id: str) -> InlineKeyboardMarkup:
@@ -160,11 +149,20 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.message.reply_text(
         "👋 Chào mừng đến với *Cam's Moni*!\n\n"
-        "Nhắn tin để ghi chi tiêu:\n"
+        "*Ghi chi tiêu:*\n"
         "  `39 cơm trưa` → chi 39.000đ\n"
         "  `.500 lương` → thu 500.000đ\n"
-        "  `+200 mẹ cho` → thu 200.000đ\n\n"
-        "Có thể dùng voice chat để ghi lại giao dịch, tìm kiếm hoặc thiết lập ngân sách.\n\n"
+        "  `+200 mẹ cho` → thu 200.000đ\n"
+        "  `cơm 50, grab 30` → ghi nhiều khoản 1 lần\n\n"
+        "*Ghi theo ngày khác:*\n"
+        "  `15. 50 cơm` → ngày 15 tháng này\n"
+        "  `15/6 50 cơm` hoặc `15-6 50 cơm` → ngày 15/6\n\n"
+        "*Voice:* nói trực tiếp để ghi, tìm kiếm hoặc đặt ngân sách — vd \"39 cơm trưa\", \"tìm cơm\", \"đặt ngân sách ăn ngoài 3 triệu\".\n\n"
+        "*Tìm kiếm* (`/search`):\n"
+        "  `/search cơm` → theo từ khoá\n"
+        "  `/search ăn ngoài` → theo danh mục\n"
+        "  `/search 200` → 200k-299k\n"
+        "  `/search <200`, `/search >50`, `/search 50-200` → khoảng tiền\n\n"
         "Dùng menu bên dưới để xem thống kê.",
         parse_mode="Markdown",
         reply_markup=_main_keyboard(update.effective_user.id),
