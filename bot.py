@@ -7,24 +7,36 @@ import os
 import re
 import uuid
 from datetime import datetime, timedelta, time as dtime
-from typing import Optional
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from telegram import (
-    Update, ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, WebAppInfo,
+    BotCommand,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    Update,
+    User,
+    Voice,
+    WebAppInfo,
 )
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters,
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from parser import parse_message, parse_batch_message, format_amount
 import classifier
 from classifier import (
-    classify, category_display, CATEGORY_INFO, CATEGORY_KEYS,
-    INCOME_CATEGORY_KEYS, EXPENSE_CATEGORY_KEYS,
+    classify, category_display, CATEGORY_INFO
 )
 from sheets import (
     add_transaction, update_transaction_field, now_vn, format_ts, init_sheets,
@@ -49,6 +61,68 @@ logger = logging.getLogger(__name__)
 TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 MINI_APP_URL = os.getenv("MINI_APP_URL", "https://cammoni-app.vercel.app")
+
+
+def _user(update: Update) -> User:
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Telegram update has no effective user")
+    return user
+
+
+def _message(update: Update) -> Message:
+    message = update.message
+    if message is None:
+        raise RuntimeError("Telegram update has no message")
+    return message
+
+
+def _message_text(update: Update) -> str:
+    text = _message(update).text
+    if text is None:
+        raise RuntimeError("Telegram message has no text")
+    return text
+
+
+def _message_voice(update: Update) -> Voice:
+    voice = _message(update).voice
+    if voice is None:
+        raise RuntimeError("Telegram message has no voice")
+    return voice
+
+
+def _effective_message(update: Update) -> Message:
+    message = update.effective_message
+    if message is None:
+        raise RuntimeError("Telegram update has no effective message")
+    return message
+
+
+def _callback_query(update: Update) -> CallbackQuery:
+    query = update.callback_query
+    if query is None:
+        raise RuntimeError("Telegram update has no callback query")
+    return query
+
+
+def _callback_data(query: CallbackQuery) -> str:
+    if not isinstance(query.data, str):
+        raise RuntimeError("Telegram callback query has no data")
+    return query.data
+
+
+def _callback_message(query: CallbackQuery) -> Message:
+    message = query.message
+    if not isinstance(message, Message):
+        raise RuntimeError("Telegram callback query has no accessible message")
+    return message
+
+
+def _user_data(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
+    user_data = context.user_data
+    if user_data is None:
+        raise RuntimeError("Telegram context has no user data")
+    return user_data
 
 # ── Whitelist ─────────────────────────────────────────────────────────────────
 
@@ -118,7 +192,7 @@ BOT_COMMANDS = [
 
 def _main_keyboard(user_id: int | None = None) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton("🗓 Tháng này"), KeyboardButton("🏆 Top tháng")],
+        [KeyboardButton("🗓 Tháng này"), KeyboardButton("🏆 Top tháng"), KeyboardButton("Help")],
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
@@ -130,24 +204,9 @@ MENU_KEYBOARD = InlineKeyboardMarkup([
      InlineKeyboardButton("📅 Tuần này", callback_data="menu_week")],
 ])
 
-def _action_sheet_kb(tx_id: str) -> InlineKeyboardMarkup:
-    """Single button opening the Mini App directly on this transaction's detail/edit screen.
 
-    The URL stays at the Mini App root (only `?tx=` differs) — Telegram only reliably
-    injects `tgWebAppData` for the root Mini App URL; deep sub-paths were observed to open
-    with no initData at all. The app reads `tx` on mount and routes client-side instead.
-    """
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✏️ Sửa", web_app=WebAppInfo(url=f"{MINI_APP_URL}/?tx={tx_id}")),
-    ]])
-
-
-# ── Handlers ──────────────────────────────────────────────────────────────────
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
-        return
-    await update.message.reply_text(
+async def _send_bot_guide(update: Update) -> None:
+    await _message(update).reply_text(
         "👋 Chào mừng đến với *Cam's Moni*!\n\n"
         "*Ghi chi tiêu:*\n"
         "  `39 cơm trưa` → chi 39.000đ\n"
@@ -165,18 +224,37 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  `/search <200`, `/search >50`, `/search 50-200` → khoảng tiền\n\n"
         "Dùng menu bên dưới để xem thống kê.",
         parse_mode="Markdown",
-        reply_markup=_main_keyboard(update.effective_user.id),
+        reply_markup=_main_keyboard(_user(update).id),
     )
+
+def _action_sheet_kb(tx_id: str) -> InlineKeyboardMarkup:
+    """Single button opening the Mini App directly on this transaction's detail/edit screen.
+
+    The URL stays at the Mini App root (only `?tx=` differs) — Telegram only reliably
+    injects `tgWebAppData` for the root Mini App URL; deep sub-paths were observed to open
+    with no initData at all. The app reads `tx` on mount and routes client-side instead.
+    """
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✏️ Sửa", web_app=WebAppInfo(url=f"{MINI_APP_URL}/?tx={tx_id}")),
+    ]])
+
+
+# ── Handlers ──────────────────────────────────────────────────────────────────
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(_user(update).id):
+        return
+    await _send_bot_guide(update)
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
-    await update.effective_message.reply_text("📊 Chọn thống kê:", reply_markup=MENU_KEYBOARD)
+    await _effective_message(update).reply_text("📊 Chọn thống kê:", reply_markup=MENU_KEYBOARD)
 
 
 async def cmd_thang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
     args = context.args or []
     if args:
@@ -192,25 +270,25 @@ async def cmd_thang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 end = datetime(year, month + 1, 1, tzinfo=TZ) - timedelta(seconds=1)
             await _send_stats(update, context, "month", custom_start=start, custom_end=end)
         except (ValueError, IndexError):
-            await update.message.reply_text("Dùng: `/month 5` hoặc `/month 5 2025`", parse_mode="Markdown")
+            await _message(update).reply_text("Dùng: `/month 5` hoặc `/month 5 2025`", parse_mode="Markdown")
     else:
         await _send_stats(update, context, "month")
 
 async def cmd_tuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
     await _send_stats(update, context, "week")
 
 async def cmd_homnay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
     await _send_stats(update, context, "today")
 
 async def cmd_khoang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
-    context.user_data["waiting_custom_range"] = True
-    await update.message.reply_text(
+    _user_data(context)["waiting_custom_range"] = True
+    await _message(update).reply_text(
         "Nhập khoảng thời gian:\n"
         "• `3 6` — ngày 3 đến ngày 6 tháng này\n"
         "• `5/5 6` — ngày 5/5 đến ngày 6 tháng này\n"
@@ -220,17 +298,17 @@ async def cmd_khoang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 async def cmd_topthang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
     await _send_top(update, context, "month")
 
 async def cmd_toptuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
     await _send_top(update, context, "week")
 
 async def cmd_ngansach(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
     await budget_menu(update, context)
 
@@ -248,15 +326,15 @@ def _resolve_timestamp(day: int, month: int | None) -> datetime:
 
 async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle any text message that looks like a transaction."""
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
 
-    text = update.message.text
+    text = _message_text(update)
     result = parse_message(text)
     if not result:
         return  # not a transaction, ignore
 
-    user_id = str(update.effective_user.id)
+    user_id = str(_user(update).id)
 
     # Resolve timestamp (may include date from message prefix)
     if result.date_day:
@@ -272,12 +350,12 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     tx_id = str(uuid.uuid4())[:8]
 
     # Store for later use in recat/date handlers
-    context.user_data[f"tx_desc_{tx_id}"] = result.description
-    context.user_data[f"tx_type_{tx_id}"] = result.tx_type
-    context.user_data[f"tx_ts_{tx_id}"] = timestamp
+    _user_data(context)[f"tx_desc_{tx_id}"] = result.description
+    _user_data(context)[f"tx_type_{tx_id}"] = result.tx_type
+    _user_data(context)[f"tx_ts_{tx_id}"] = timestamp
 
     display_name = user_store.get_name(
-        update.effective_user.id, update.effective_user.first_name or ""
+        _user(update).id, _user(update).first_name or ""
     )
     name_part = f" ({display_name})" if display_name else ""
     type_label = "Thu nhập" if result.tx_type == "thu" else "Chi tiêu"
@@ -289,7 +367,7 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
     keyboard = _action_sheet_kb(tx_id)
-    await update.message.reply_text(reply_text, reply_markup=keyboard, parse_mode="Markdown")
+    await _message(update).reply_text(reply_text, reply_markup=keyboard, parse_mode="Markdown")
 
     # Write to sheet in background (async, no executor needed)
     async def _save():
@@ -309,10 +387,10 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if result.tx_type == "chi":
                 warning = await check_budget_warning(cat_key, result.amount)
                 if warning:
-                    await update.message.reply_text(warning)
+                    await _message(update).reply_text(warning)
         except Exception as e:
             logger.exception(f"[bot] _save FAILED: {e}")
-            await update.message.reply_text(f"⚠️ Lưu sheet thất bại: {e}")
+            await _message(update).reply_text(f"⚠️ Lưu sheet thất bại: {e}")
 
     asyncio.create_task(_save())
 
@@ -324,8 +402,8 @@ async def _handle_batch_transactions(
     items: list,
 ) -> None:
     """Classify and save a list of parsed transactions; send one message per transaction."""
-    uid = str(update.effective_user.id)
-    uname = user_store.get_name(update.effective_user.id, update.effective_user.first_name or "")
+    uid = str(_user(update).id)
+    uname = user_store.get_name(_user(update).id, _user(update).first_name or "")
 
     parsed = []
     for item in items:
@@ -364,9 +442,9 @@ async def _handle_batch_transactions(
         else:
             timestamp = now_vn()
 
-        context.user_data[f"tx_desc_{tx_id}"] = description
-        context.user_data[f"tx_type_{tx_id}"] = tx_type
-        context.user_data[f"tx_ts_{tx_id}"] = timestamp
+        _user_data(context)[f"tx_desc_{tx_id}"] = description
+        _user_data(context)[f"tx_type_{tx_id}"] = tx_type
+        _user_data(context)[f"tx_ts_{tx_id}"] = timestamp
 
         name_part = f" ({uname})" if uname else ""
         type_label = "Thu nhập" if tx_type == "thu" else "Chi tiêu"
@@ -378,7 +456,7 @@ async def _handle_batch_transactions(
         )
 
         keyboard = _action_sheet_kb(tx_id)
-        await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+        await _effective_message(update).reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
         async def _save(u=uid, un=uname, tt=tx_type, a=amount, ck=cat_key,
                         d=description, ts=timestamp, tid=tx_id):
@@ -392,7 +470,7 @@ async def _handle_batch_transactions(
                 if tt == "chi":
                     warning = await check_budget_warning(ck, a)
                     if warning:
-                        await update.effective_message.reply_text(warning)
+                        await _effective_message(update).reply_text(warning)
             except Exception as e:
                 logger.exception(f"[bot] batch save FAILED: {e}")
 
@@ -401,10 +479,10 @@ async def _handle_batch_transactions(
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle voice messages: transcribe via Gemini and record transactions."""
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
 
-    msg = await update.message.reply_text("🎤 Đang nhận dạng giọng nói...")
+    msg = await _message(update).reply_text("🎤 Đang nhận dạng giọng nói...")
 
     try:
         import io
@@ -412,7 +490,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         from sheets import get_recent_transactions
         from parser import parse_amount_search, format_amount_range
 
-        voice = update.message.voice
+        voice = _message_voice(update)
         tg_file = await context.bot.get_file(voice.file_id)
         buf = io.BytesIO()
         await tg_file.download_to_memory(buf)
@@ -475,9 +553,9 @@ async def _handle_voice_search(
         await msg.edit_text(f"Không tìm thấy kết quả cho {' · '.join(parts) or 'tìm kiếm'}.")
         return
 
-    uid = update.effective_user.id
+    uid = _user(update).id
     rows_desc = _sort_rows_grouped(rows)
-    context.user_data[f"txlist_rows_{uid}"] = rows_desc
+    _user_data(context)[f"txlist_rows_{uid}"] = rows_desc
 
     label_parts = []
     if keyword:
@@ -485,11 +563,11 @@ async def _handle_voice_search(
     if amount_min is not None:
         label_parts.append(format_amount_range(amount_min, amount_max))
     label = " · ".join(label_parts) or "Tìm kiếm"
-    context.user_data[f"txlist_label_{uid}"] = label
+    _user_data(context)[f"txlist_label_{uid}"] = label
 
     total = len(rows_desc)
     shown = min(_PAGE_SIZE, total)
-    context.user_data[f"txlist_offset_{uid}"] = shown
+    _user_data(context)[f"txlist_offset_{uid}"] = shown
     await msg.edit_text(
         _format_txlist_grouped(rows_desc, shown, f"🔍 {label}"),
         reply_markup=_txlist_keyboard(uid, shown, total),
@@ -526,7 +604,7 @@ async def _handle_voice_stats(update, context, msg, result: dict) -> None:
         except (ValueError, TypeError):
             pass
 
-    uid = update.effective_user.id
+    uid = _user(update).id
     try:
         stats = await compute_stats(period, custom_start=custom_start, custom_end=custom_end)
     except Exception as e:
@@ -544,10 +622,10 @@ async def _handle_voice_stats(update, context, msg, result: dict) -> None:
             _lbl = f"{format_ts(_s)[:5]}-{format_ts(stats['end'])[:5]}"
         else:
             _lbl = "Thống kê"
-        context.user_data[f"txlist_rows_{uid}"] = _sort_rows_grouped(stats["transactions"])
-        context.user_data[f"txlist_label_{uid}"] = _lbl
-        context.user_data[f"txlist_offset_{uid}"] = min(_PAGE_SIZE, len(stats["transactions"]))
-        context.user_data[f"chart_params_{uid}"] = {
+        _user_data(context)[f"txlist_rows_{uid}"] = _sort_rows_grouped(stats["transactions"])
+        _user_data(context)[f"txlist_label_{uid}"] = _lbl
+        _user_data(context)[f"txlist_offset_{uid}"] = min(_PAGE_SIZE, len(stats["transactions"]))
+        _user_data(context)[f"chart_params_{uid}"] = {
             "period": period, "custom_start": custom_start,
             "custom_end": custom_end, "filter_uid": None,
         }
@@ -585,13 +663,13 @@ async def _handle_voice_category_filter(update, context, msg, result: dict) -> N
     if not rows:
         await msg.edit_text(f"Không tìm thấy giao dịch nào cho {label}.")
         return
-    uid = update.effective_user.id
+    uid = _user(update).id
     rows_desc = _sort_rows_grouped(rows)
-    context.user_data[f"txlist_rows_{uid}"] = rows_desc
-    context.user_data[f"txlist_label_{uid}"] = label
+    _user_data(context)[f"txlist_rows_{uid}"] = rows_desc
+    _user_data(context)[f"txlist_label_{uid}"] = label
     total = len(rows_desc)
     shown = min(_PAGE_SIZE, total)
-    context.user_data[f"txlist_offset_{uid}"] = shown
+    _user_data(context)[f"txlist_offset_{uid}"] = shown
     await msg.edit_text(
         _format_txlist_grouped(rows_desc, shown, f"🔍 {label}"),
         reply_markup=_txlist_keyboard(uid, shown, total),
@@ -602,9 +680,9 @@ async def _handle_voice_category_filter(update, context, msg, result: dict) -> N
 # ── Quick delete / exclude handlers ──────────────────────────────────────────
 
 async def handle_qdel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
+    query = _callback_query(update)
     await query.answer()
-    tx_id = query.data.replace("qdel_", "")
+    tx_id = _callback_data(query).replace("qdel_", "")
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Xác nhận xóa", callback_data=f"qdelok_{tx_id}"),
         InlineKeyboardButton("❌ Hủy", callback_data=f"qdelno_{tx_id}"),
@@ -613,15 +691,15 @@ async def handle_qdel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def handle_qdelok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
+    query = _callback_query(update)
     await query.answer()
-    if query.data.startswith("qdelno_"):
-        tx_id = query.data.replace("qdelno_", "")
+    if _callback_data(query).startswith("qdelno_"):
+        tx_id = _callback_data(query).replace("qdelno_", "")
         await query.edit_message_reply_markup(reply_markup=_action_sheet_kb(tx_id))
         return
-    tx_id = query.data.replace("qdelok_", "")
+    tx_id = _callback_data(query).replace("qdelok_", "")
     ok = await delete_transaction(tx_id)
-    first_line = (query.message.text or "").split("\n")[0]
+    first_line = (_callback_message(query).text or "").split("\n")[0]
     if ok:
         await query.edit_message_text(f"🗑️ Đã xóa: {first_line}")
     else:
@@ -629,9 +707,9 @@ async def handle_qdelok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def handle_qexcl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
+    query = _callback_query(update)
     await query.answer()
-    tx_id = query.data.replace("qexcl_", "")
+    tx_id = _callback_data(query).replace("qexcl_", "")
     result = await get_transaction_by_id(tx_id)
     if not result:
         await query.answer("Không tìm thấy khoản.", show_alert=True)
@@ -641,7 +719,7 @@ async def handle_qexcl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     new_val = "" if currently_excluded else "Y"
     await update_transaction_field(tx_id, "excluded", new_val)
 
-    old_text = query.message.text or ""
+    old_text = _callback_message(query).text or ""
     skip_prefixes = ("🚫", "✅ Đã tính", "🔴", "⚠️")
     lines = [l for l in old_text.split("\n") if not any(l.startswith(p) for p in skip_prefixes)]
     base = "\n".join(lines).rstrip()
@@ -654,17 +732,19 @@ async def handle_qexcl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # ── Stats keyboard handlers ───────────────────────────────────────────────────
 
 async def handle_stats_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
 
-    text = update.message.text.strip()
+    text = _message_text(update).strip()
 
     if text == "🗓 Tháng này":
         await _send_stats(update, context, "month")
     elif text == "🏆 Top tháng":
         await _send_top(update, context, "month")
-    elif context.user_data.get("waiting_custom_range"):
-        context.user_data["waiting_custom_range"] = False
+    elif text == "Help":
+        await _send_bot_guide(update)
+    elif _user_data(context).get("waiting_custom_range"):
+        _user_data(context)["waiting_custom_range"] = False
         await _handle_custom_range(update, context, text)
 
 
@@ -688,7 +768,7 @@ async def _handle_custom_range(update: Update, context: ContextTypes.DEFAULT_TYP
     tokens = [t for t in cleaned.split() if t not in ("đến", "tới", "to")]
 
     if len(tokens) < 2:
-        await update.message.reply_text(
+        await _message(update).reply_text(
             "Nhập 2 mốc thời gian. VD: `3 6` hoặc `5/5 6` hoặc `25/5 3/6`",
             parse_mode="Markdown",
         )
@@ -697,7 +777,7 @@ async def _handle_custom_range(update: Update, context: ContextTypes.DEFAULT_TYP
     start = _parse_date_token(tokens[0], ref)
     end = _parse_date_token(tokens[1], ref)
     if not start or not end:
-        await update.message.reply_text("Không nhận ra ngày. VD: `3 6` hoặc `5/5 6`", parse_mode="Markdown")
+        await _message(update).reply_text("Không nhận ra ngày. VD: `3 6` hoặc `5/5 6`", parse_mode="Markdown")
         return
 
     if end < start:
@@ -707,9 +787,9 @@ async def _handle_custom_range(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
+    query = _callback_query(update)
     await query.answer()
-    action = query.data
+    action = _callback_data(query)
 
     if action == "menu_today":
         await _send_stats(update, context, "today")
@@ -722,8 +802,8 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     elif action == "menu_topmonth":
         await _send_top(update, context, "month")
     elif action == "menu_custom":
-        context.user_data["waiting_custom_range"] = True
-        await query.message.reply_text(
+        _user_data(context)["waiting_custom_range"] = True
+        await _callback_message(query).reply_text(
             "Nhập khoảng thời gian (VD: `01/06 - 09/06` hoặc `01/06/2025 - 09/06/2025`):",
             parse_mode="Markdown",
         )
@@ -737,7 +817,7 @@ async def _send_top(
     from sheets import get_transactions_range
     from stats import _date_range
     period_label = "tuần này" if period == "week" else "tháng này"
-    msg = await update.effective_message.reply_text("⏳ Đang tải...")
+    msg = await _effective_message(update).reply_text("⏳ Đang tải...")
     try:
         start, end = _date_range(period)
         rows = await get_transactions_range(start, end)
@@ -805,9 +885,9 @@ async def _send_stats(
     custom_end=None,
 ) -> None:
     from stats import PERIODS
-    uid = update.effective_user.id
+    uid = _user(update).id
 
-    msg = await update.effective_message.reply_text("⏳ Đang tải...")
+    msg = await _effective_message(update).reply_text("⏳ Đang tải...")
 
     try:
         stats = await compute_stats(period, custom_start=custom_start, custom_end=custom_end)
@@ -817,11 +897,11 @@ async def _send_stats(
 
     has_data = stats["total_chi"] > 0 or stats["total_thu"] > 0
     if has_data:
-        context.user_data[f"chart_params_{uid}"] = {
+        _user_data(context)[f"chart_params_{uid}"] = {
             "period": period, "custom_start": custom_start,
             "custom_end": custom_end, "filter_uid": None,
         }
-        context.user_data[f"txlist_rows_{uid}"] = _sort_rows_grouped(stats["transactions"])
+        _user_data(context)[f"txlist_rows_{uid}"] = _sort_rows_grouped(stats["transactions"])
         # Derive a good label: show month/year for monthly stats
         _s = stats.get("start")
         if period == "month" and _s:
@@ -832,7 +912,7 @@ async def _send_stats(
             _txlabel = f"{format_ts(_s)[:5]}-{format_ts(stats['end'])[:5]}"
         else:
             _txlabel = "Khoảng"
-        context.user_data[f"txlist_label_{uid}"] = _txlabel
+        _user_data(context)[f"txlist_label_{uid}"] = _txlabel
 
     await msg.edit_text(
         format_stats_text(stats),
@@ -854,26 +934,26 @@ def _txlist_keyboard(uid: int, shown: int, total: int) -> InlineKeyboardMarkup:
 
 
 async def handle_txlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
+    query = _callback_query(update)
     await query.answer()
-    parts = query.data.split("_")  # txlist_{sub}_{...}
+    parts = _callback_data(query).split("_")  # txlist_{sub}_{...}
     sub = parts[1]
 
     # ── Load page: txlist_{uid}_{offset} ──────────────────────────────────────
     if sub.lstrip("-").isdigit():
         uid, offset = int(sub), int(parts[2])
-        rows = context.user_data.get(f"txlist_rows_{uid}", [])
-        label = context.user_data.get(f"txlist_label_{uid}", "Giao dịch")
+        rows = _user_data(context).get(f"txlist_rows_{uid}", [])
+        label = _user_data(context).get(f"txlist_label_{uid}", "Giao dịch")
         total = len(rows)
         if not rows:
             await query.answer("Không có giao dịch nào.", show_alert=True)
             return
         shown = min(offset + _PAGE_SIZE, total)
-        context.user_data[f"txlist_offset_{uid}"] = shown
+        _user_data(context)[f"txlist_offset_{uid}"] = shown
         text = _format_txlist_grouped(rows, shown, f"Danh sách — {label}")
         markup = _txlist_keyboard(uid, shown, total)
         if offset == 0:
-            await query.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+            await _callback_message(query).reply_text(text, reply_markup=markup, parse_mode="Markdown")
         else:
             await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
         return
@@ -881,8 +961,8 @@ async def handle_txlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # ── Show number selector: txlist_sel_{uid} ────────────────────────────────
     if sub == "sel":
         uid = int(parts[2])
-        rows = context.user_data.get(f"txlist_rows_{uid}", [])
-        shown = context.user_data.get(f"txlist_offset_{uid}", min(_PAGE_SIZE, len(rows)))
+        rows = _user_data(context).get(f"txlist_rows_{uid}", [])
+        shown = _user_data(context).get(f"txlist_offset_{uid}", min(_PAGE_SIZE, len(rows)))
         visible = rows[:shown]
         if not visible:
             await query.answer("Không có giao dịch nào.", show_alert=True)
@@ -910,8 +990,8 @@ async def handle_txlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # ── Pick item: txlist_pick_{uid}_{index} ──────────────────────────────────
     if sub == "pick":
         uid, idx = int(parts[2]), int(parts[3])
-        rows = context.user_data.get(f"txlist_rows_{uid}", [])
-        shown = context.user_data.get(f"txlist_offset_{uid}", min(_PAGE_SIZE, len(rows)))
+        rows = _user_data(context).get(f"txlist_rows_{uid}", [])
+        shown = _user_data(context).get(f"txlist_offset_{uid}", min(_PAGE_SIZE, len(rows)))
         total = len(rows)
         if idx >= len(rows):
             await query.answer("Không tìm thấy.", show_alert=True)
@@ -920,12 +1000,12 @@ async def handle_txlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         tx_id = str(row.get("id", ""))
 
         # Populate user_data for fix_cat/fix_date/qdel/qexcl handlers
-        context.user_data[f"tx_type_{tx_id}"] = row.get("type", "chi")
-        context.user_data[f"tx_desc_{tx_id}"] = row.get("description", "")
+        _user_data(context)[f"tx_type_{tx_id}"] = row.get("type", "chi")
+        _user_data(context)[f"tx_desc_{tx_id}"] = row.get("description", "")
         from sheets import parse_ts as _pts
         ts_obj = _pts(str(row.get("timestamp", "")))
         if ts_obj:
-            context.user_data[f"tx_ts_{tx_id}"] = ts_obj
+            _user_data(context)[f"tx_ts_{tx_id}"] = ts_obj
 
         # Restore original list keyboard
         await query.edit_message_reply_markup(reply_markup=_txlist_keyboard(uid, shown, total))
@@ -952,27 +1032,27 @@ async def handle_txlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"📅 {ts}{name_line}{excl_line}"
         )
         keyboard = _action_sheet_kb(tx_id)
-        await query.message.reply_text(detail, reply_markup=keyboard, parse_mode="Markdown")
+        await _callback_message(query).reply_text(detail, reply_markup=keyboard, parse_mode="Markdown")
         return
 
     # ── Cancel number selector: txlist_selcancel_{uid} ────────────────────────
     if sub == "selcancel":
         uid = int(parts[2])
-        rows = context.user_data.get(f"txlist_rows_{uid}", [])
-        shown = context.user_data.get(f"txlist_offset_{uid}", min(_PAGE_SIZE, len(rows)))
+        rows = _user_data(context).get(f"txlist_rows_{uid}", [])
+        shown = _user_data(context).get(f"txlist_offset_{uid}", min(_PAGE_SIZE, len(rows)))
         total = len(rows)
         await query.edit_message_reply_markup(reply_markup=_txlist_keyboard(uid, shown, total))
         return
 
 
 async def handle_chart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
+    query = _callback_query(update)
     await query.answer("Đang tạo biểu đồ...")
-    uid = int(query.data.replace("chart_", ""))
+    uid = int(_callback_data(query).replace("chart_", ""))
 
-    params = context.user_data.get(f"chart_params_{uid}")
+    params = _user_data(context).get(f"chart_params_{uid}")
     if not params:
-        await query.message.reply_text("❌ Hãy xem thống kê lại rồi bấm xem biểu đồ.")
+        await _callback_message(query).reply_text("❌ Hãy xem thống kê lại rồi bấm xem biểu đồ.")
         return
 
     try:
@@ -983,17 +1063,17 @@ async def handle_chart_callback(update: Update, context: ContextTypes.DEFAULT_TY
             custom_end=params.get("custom_end"),
         )
         pie_bytes, bar_bytes = generate_charts(stats)
-        await query.message.reply_photo(pie_bytes, caption="Chi tiêu theo danh mục")
-        await query.message.reply_photo(bar_bytes, caption="Chi tiêu theo ngày")
+        await _callback_message(query).reply_photo(pie_bytes, caption="Chi tiêu theo danh mục")
+        await _callback_message(query).reply_photo(bar_bytes, caption="Chi tiêu theo ngày")
     except Exception as e:
         logger.warning(f"Chart generation failed: {e}")
-        await query.message.reply_text(f"❌ Lỗi tạo biểu đồ: {e}")
+        await _callback_message(query).reply_text(f"❌ Lỗi tạo biểu đồ: {e}")
 
 
 # ── World Cup scores ───────────────────────────────────────────────────────────
 
 async def cmd_worldcup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user.id):
+    if not is_allowed(_user(update).id):
         return
     date_arg = None
     if context.args:
@@ -1001,10 +1081,10 @@ async def cmd_worldcup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             from datetime import date
             date_arg = date.fromisoformat(context.args[0])
         except ValueError:
-            await update.effective_message.reply_text("Dùng: /worldcup hoặc /worldcup YYYY-MM-DD")
+            await _effective_message(update).reply_text("Dùng: /worldcup hoặc /worldcup YYYY-MM-DD")
             return
     text = await fetch_worldcup_scores(date_arg)
-    await update.effective_message.reply_text(text, parse_mode="Markdown")
+    await _effective_message(update).reply_text(text, parse_mode="Markdown")
 
 
 async def worldcup_morning(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1035,7 +1115,7 @@ async def daily_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     yesterday_text = ""
     try:
-        yesterday_stats = compute_stats("today")
+        yesterday_stats = await compute_stats("today")
         if yesterday_stats["total_chi"] > 0:
             yesterday_text = f"\nHôm qua chi: {format_amount(yesterday_stats['total_chi'])}"
     except Exception:
@@ -1169,25 +1249,28 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if "Message is not modified" in str(context.error):
         return
     logger.exception("Unhandled exception", exc_info=context.error)
-    if isinstance(update, Update) and update.effective_message:
-        await update.effective_message.reply_text(
+    if isinstance(update, Update):
+        message = update.effective_message
+        if message is None:
+            return
+        await message.reply_text(
             f"❌ Lỗi: {context.error}"
         )
 
 
 async def _combined_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Route text: stats keyboard buttons → handle_stats_keyboard, else → handle_transaction."""
-    uid = update.effective_user.id
-    text = update.message.text.strip()
+    uid = _user(update).id
+    text = _message_text(update).strip()
     logger.info(f"MSG from {uid} (allowed={is_allowed(uid)}): {repr(text)}")
 
     if not is_allowed(uid):
         logger.warning(f"Rejected user {uid} — not in whitelist {ALLOWED_USERS}")
         return
 
-    STATS_BUTTONS = {"🗓 Tháng này", "🏆 Top tháng"}
+    STATS_BUTTONS = {"🗓 Tháng này", "🏆 Top tháng", "Help"}
 
-    if text in STATS_BUTTONS or context.user_data.get("waiting_custom_range"):
+    if text in STATS_BUTTONS or _user_data(context).get("waiting_custom_range"):
         await handle_stats_keyboard(update, context)
         return
 
@@ -1202,11 +1285,11 @@ async def _combined_text_handler(update: Update, context: ContextTypes.DEFAULT_T
     batch = parse_batch_message(text)
     if batch:
         logger.info(f"Parse result (batch): {len(batch)} items")
-        msg = await update.message.reply_text("⏳ Đang ghi...")
+        msg = await _message(update).reply_text("⏳ Đang ghi...")
         await _handle_batch_transactions(update, context, msg, batch)
         return
 
-    await update.message.reply_text(
+    await _message(update).reply_text(
         "❓ Không hiểu. Thử:\n"
         "• `39 cơm trưa` — ghi 1 khoản\n"
         "• `40 cơm, 50 cháo, 12 gửi xe` — ghi nhiều khoản",

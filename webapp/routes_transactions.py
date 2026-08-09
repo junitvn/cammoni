@@ -4,9 +4,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from classifier import EXPENSE_CATEGORY_KEYS, INCOME_CATEGORY_KEYS, classify
+from parser import normalize_vn, parse_amount_search
 from sheets import (
     add_transaction, delete_transaction, format_ts, get_transaction_by_id,
-    now_vn, update_transaction_field, upsert_config_mapping,
+    get_recent_transactions, load_categories_from_sheet, now_vn, update_transaction_field, upsert_config_mapping,
 )
 
 from webapp.auth import CurrentUser, get_current_user
@@ -14,6 +15,37 @@ from webapp.schemas import TransactionCreate, TransactionOut, TransactionUpdate
 from webapp.service import get_category_transactions, parse_client_timestamp, row_to_out
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
+
+
+def _digits(value: object) -> str:
+    return "".join(ch for ch in str(value) if ch.isdigit())
+
+
+def _matches_search(row: dict, categories: dict, query: str) -> bool:
+    normalized_query = normalize_vn(query)
+    compact_query = _digits(query)
+
+    if normalized_query in normalize_vn(row.get("description", "")):
+        return True
+
+    amount_digits = _digits(row.get("amount", ""))
+    if compact_query and compact_query in amount_digits:
+        return True
+
+    amount_range = parse_amount_search(query)
+    if amount_range:
+        amount_min, amount_max, _ = amount_range
+        try:
+            amount = int(float(row.get("amount", 0)))
+        except (ValueError, TypeError):
+            amount = 0
+        if (amount_min is None or amount >= amount_min) and (amount_max is None or amount <= amount_max):
+            return True
+
+    category_key = row.get("category", "")
+    category = categories.get(category_key, {})
+    category_text = " ".join([str(category_key), str(category.get("name", ""))])
+    return normalized_query in normalize_vn(category_text)
 
 
 @router.get("", response_model=list[TransactionOut])
@@ -27,6 +59,22 @@ async def list_transactions(
         raise HTTPException(400, "category, start and end are required")
     rows = await get_category_transactions(category, start, end)
     return [row_to_out(row) for row in rows]
+
+
+@router.get("/search", response_model=list[TransactionOut])
+async def search_transactions(
+    q: str = "",
+    limit: int = 100,
+    user: CurrentUser = Depends(get_current_user),
+):
+    query = q.strip()
+    if not query:
+        return []
+
+    categories = await load_categories_from_sheet()
+    result_limit = min(max(limit, 1), 200)
+    rows = await get_recent_transactions(limit=10_000)
+    return [row_to_out(row) for row in rows if _matches_search(row, categories, query)][:result_limit]
 
 
 @router.get("/{tx_id}", response_model=TransactionOut)
