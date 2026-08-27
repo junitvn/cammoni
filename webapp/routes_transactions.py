@@ -128,12 +128,25 @@ async def edit_transaction(tx_id: str, body: TransactionUpdate, user: CurrentUse
         raise HTTPException(404, "Transaction not found")
     _, row, _ = result
 
+    if body.type is not None and body.type not in ("chi", "thu"):
+        raise HTTPException(400, "type must be 'chi' or 'thu'")
+
+    # A category is only valid for one of chi/thu, so any time either the type or
+    # the category is changing, re-validate the resulting pair against each other
+    # — otherwise switching type alone would silently leave a mismatched category
+    # in place (e.g. an income row still tagged with an expense category).
+    effective_type = body.type if body.type is not None else row.get("type")
+    effective_category = body.category if body.category is not None else row.get("category")
+    if body.type is not None or body.category is not None:
+        valid_keys = INCOME_CATEGORY_KEYS if effective_type == "thu" else EXPENSE_CATEGORY_KEYS
+        if effective_category not in valid_keys:
+            raise HTTPException(400, "Unknown category for this transaction type")
+
+    if body.type is not None:
+        await update_transaction_field(tx_id, "type", body.type)
     if body.amount is not None:
         await update_transaction_field(tx_id, "amount", body.amount)
     if body.category is not None:
-        valid_keys = INCOME_CATEGORY_KEYS if row.get("type") == "thu" else EXPENSE_CATEGORY_KEYS
-        if body.category not in valid_keys:
-            raise HTTPException(400, "Unknown category for this transaction type")
         await update_transaction_field(tx_id, "category", body.category)
         await upsert_config_mapping(row.get("description", ""), body.category)
     if body.description is not None:

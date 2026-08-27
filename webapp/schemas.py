@@ -46,6 +46,7 @@ class TransactionCreate(BaseModel):
 
 
 class TransactionUpdate(BaseModel):
+    type: Optional[str] = None  # "chi" | "thu"
     amount: Optional[int] = None
     category: Optional[str] = None
     description: Optional[str] = None
