@@ -40,7 +40,7 @@ Oracle/Docker chỉ chạy Telegram bot + FastAPI backend (`webapp/`). Frontend 
 | `charts.py` | Vẽ pie chart + bar chart bằng matplotlib, trả bytes PNG |
 | `editor.py` | ConversationHandler `/edit` và `/search`: paging, 4-button actions |
 | `budget.py` | ConversationHandler `/budget`: đặt/xem ngân sách |
-| `api.py` | FastAPI service riêng, chỉ serve `/api/budgets` (GET/PUT) cho Mini App — không phải "moni-app API" thật sự đang chạy production, xem docstring đầu file |
+| `webapp/routes_budgets.py` | `/api/budgets` (GET/PUT) cho Mini App, phần của "moni-app API" (`webapp/`) đang chạy production |
 | `users.py` | Cache tên user `{user_id: name}`, dùng chung giữa các module |
 | `config/users.yaml` | Whitelist user IDs + tên hiển thị (nguồn chính để quản lý quyền) |
 | `config/categories.yaml` | Không dùng runtime; seed categories trong `sheets.py._CATEGORIES_SEED` |

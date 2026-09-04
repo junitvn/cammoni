@@ -1,66 +1,17 @@
-"""
-Standalone FastAPI service exposing monthly budget (spending limit) data —
-total and per category — for the cammoni-app Mini App frontend.
+"""Monthly budget (spending limit) endpoints: total and per-category."""
+from fastapi import APIRouter, Depends, HTTPException
 
-Reference implementation only: the Mini App's other endpoints
-(/api/categories, /api/transactions, /api/home, /api/analysis) are served by
-a separate "moni-app API" process that isn't part of this repo. This app
-serves /api/budgets only — merge its routes into that service (or point the
-frontend's VITE_API_BASE_URL at this one) when ready to go live.
-
-Run: uvicorn api:app --reload --port 8001
-"""
-import logging
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-
-import classifier
 from classifier import CATEGORY_INFO, EXPENSE_CATEGORY_KEYS
-from sheets import get_budgets, set_budget, get_transactions_range, load_categories_from_sheet, now_vn
+from sheets import get_budgets, get_transactions_range, now_vn, set_budget
 
-logger = logging.getLogger(__name__)
+from webapp.auth import CurrentUser, get_current_user
+from webapp.schemas import BudgetOut, BudgetUpdate
+
+router = APIRouter(prefix="/api/budgets", tags=["budgets"])
 
 TOTAL_SCOPE = "chung"
 TOTAL_LABEL = "Tổng chi"
 TOTAL_EMOJI = "💰"
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    try:
-        cats = await load_categories_from_sheet()
-        if cats:
-            classifier.reload_categories(cats)
-    except Exception as e:
-        logger.warning(f"load_categories failed (non-fatal): {e}")
-    yield
-
-
-app = FastAPI(title="moni-app budgets API", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-class BudgetOut(BaseModel):
-    scope: str
-    label: str
-    emoji: str
-    limit_vnd: int
-    period: str
-    used: int
-    pct: float
-
-
-class BudgetUpdate(BaseModel):
-    limit_vnd: int = Field(ge=0)
 
 
 async def _month_usage() -> tuple[int, dict[str, int]]:
@@ -93,8 +44,8 @@ def _pct(used: int, limit: int) -> float:
     return (used / limit * 100) if limit > 0 else 0.0
 
 
-@app.get("/api/budgets", response_model=list[BudgetOut])
-async def list_budgets() -> list[BudgetOut]:
+@router.get("", response_model=list[BudgetOut])
+async def list_budgets(user: CurrentUser = Depends(get_current_user)) -> list[BudgetOut]:
     budget_rows = await get_budgets()
     limits: dict[str, int] = {}
     period = "month"
@@ -137,8 +88,10 @@ async def list_budgets() -> list[BudgetOut]:
     return out
 
 
-@app.put("/api/budgets/{scope}", response_model=BudgetOut)
-async def update_budget(scope: str, body: BudgetUpdate) -> BudgetOut:
+@router.put("/{scope}", response_model=BudgetOut)
+async def update_budget(
+    scope: str, body: BudgetUpdate, user: CurrentUser = Depends(get_current_user)
+) -> BudgetOut:
     if scope != TOTAL_SCOPE and scope not in EXPENSE_CATEGORY_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown budget scope: {scope}")
 

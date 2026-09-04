@@ -1,7 +1,7 @@
 """Pydantic request/response models for the moni-app API."""
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CategoryOut(BaseModel):
@@ -86,3 +86,17 @@ class MonthTotals(BaseModel):
 class AnalysisSummary(BaseModel):
     by_category: list[CategoryTotal]
     monthly: list[MonthTotals]
+
+
+class BudgetOut(BaseModel):
+    scope: str
+    label: str
+    emoji: str
+    limit_vnd: int
+    period: str
+    used: int
+    pct: float
+
+
+class BudgetUpdate(BaseModel):
+    limit_vnd: int = Field(ge=0)
