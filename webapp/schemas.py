@@ -69,6 +69,7 @@ class HomeSummary(BaseModel):
     month: str
     today: DailyTotals
     month_totals: DailyTotals
+    starting_balance: int
     groups: list[TransactionGroup]
 
 
@@ -100,3 +101,20 @@ class BudgetOut(BaseModel):
 
 class BudgetUpdate(BaseModel):
     limit_vnd: int = Field(ge=0)
+
+
+class BalanceHistoryEntry(BaseModel):
+    month: str  # YYYY-MM
+    starting_balance: int
+    is_manual: bool
+
+
+class BalanceOut(BaseModel):
+    month: str  # YYYY-MM, the current month
+    starting_balance: int
+    is_manual: bool
+    history: list[BalanceHistoryEntry]
+
+
+class BalanceUpdate(BaseModel):
+    starting_balance: int

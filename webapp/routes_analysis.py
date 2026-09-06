@@ -13,7 +13,8 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 async def analysis(
     start: str = Query(default=None, description="YYYY-MM-DD, defaults to start of current month"),
     end: str = Query(default=None, description="YYYY-MM-DD, defaults to today"),
+    type: str = Query(default="chi", pattern="^(chi|thu)$", description="Category breakdown for 'chi' or 'thu'"),
     user: CurrentUser = Depends(get_current_user),
 ):
     now = now_vn()
-    return await get_analysis_summary(start or now.strftime("%Y-%m-01"), end or now.strftime("%Y-%m-%d"))
+    return await get_analysis_summary(start or now.strftime("%Y-%m-01"), end or now.strftime("%Y-%m-%d"), type)

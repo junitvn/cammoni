@@ -48,6 +48,7 @@ BUDGET_HEADER = ["scope", "limit_vnd", "period"]
 CONFIG_HEADER = ["description", "category"]
 CATEGORIES_HEADER = ["key", "name", "emoji", "income", "keywords"]
 USERS_HEADER = ["user_id", "name"]
+BALANCE_HEADER = ["month", "starting_balance"]
 
 # Default categories seeded on first run
 _CATEGORIES_SEED = [
@@ -218,7 +219,7 @@ async def init_sheets() -> None:
 
     # Create shared sheets if missing
     requests_body = []
-    for name in ("Budget", "Config", "Categories", "Users"):
+    for name in ("Budget", "Config", "Categories", "Users", "Balance"):
         if name not in existing_titles:
             requests_body.append({"addSheet": {"properties": {
                 "title": name, "gridProperties": {"rowCount": 1000, "columnCount": 20},
@@ -237,6 +238,7 @@ async def init_sheets() -> None:
         ("Config", CONFIG_HEADER),
         ("Categories", CATEGORIES_HEADER),
         ("Users", USERS_HEADER),
+        ("Balance", BALANCE_HEADER),
     ]:
         values = await _get_values(f"{name}!1:1")
         cur = values[0] if values else []
@@ -795,6 +797,36 @@ async def set_budget(scope: str, limit_vnd: int, period: str = "month") -> None:
             await _set_values(f"Budget!A{i}:C{i}", [[scope, limit_vnd, period]])
             return
     await _append_values("Budget!A:C", [[scope, limit_vnd, period]])
+
+
+# ── Balance ───────────────────────────────────────────────────────────────────
+
+async def get_balance_overrides() -> dict[str, int]:
+    """Manually-set starting balances, keyed by month ('YYYY-MM')."""
+    rows = await _get_values("Balance!A:B")
+    if not rows or rows[0] != BALANCE_HEADER:
+        return {}
+    result: dict[str, int] = {}
+    for row in rows[1:]:
+        row = _pad_row(row, 2)
+        month = row[0]
+        if not month:
+            continue
+        try:
+            result[month] = int(float(row[1]))
+        except (ValueError, TypeError):
+            result[month] = 0
+    return result
+
+
+async def set_balance_override(month: str, starting_balance: int) -> None:
+    rows = await _get_values("Balance!A:B")
+    for i, row in enumerate(rows[1:], start=2):
+        row = _pad_row(row, 2)
+        if row[0] == month:
+            await _set_values(f"Balance!A{i}:B{i}", [[month, starting_balance]])
+            return
+    await _append_values("Balance!A:B", [[month, starting_balance]])
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

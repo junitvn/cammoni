@@ -53,11 +53,12 @@ async def list_transactions(
     category: Optional[str] = None,
     start: Optional[str] = None,
     end: Optional[str] = None,
+    type: str = "chi",
     user: CurrentUser = Depends(get_current_user),
 ):
     if not category or not start or not end:
         raise HTTPException(400, "category, start and end are required")
-    rows = await get_category_transactions(category, start, end)
+    rows = await get_category_transactions(category, start, end, type)
     return [row_to_out(row) for row in rows]
 
 
