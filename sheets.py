@@ -16,6 +16,7 @@ import time
 import json
 
 import httpx
+import changes
 from parser import normalize_vn
 import google.auth.crypt
 import google.auth.jwt
@@ -39,11 +40,18 @@ COL_DESCRIPTION = 6
 COL_AUTO = 7
 COL_USER_NAME = 8
 COL_EXCLUDED = 9
+COL_CHAT_ID = 10
+COL_MESSAGE_ID = 11
 
 TRANSACTIONS_HEADER = [
     "id", "timestamp", "user", "type", "amount",
-    "category", "description", "auto_classified", "user_name", "excluded"
+    "category", "description", "auto_classified", "user_name", "excluded",
+    "chat_id", "message_id",
 ]
+# Columns every month sheet has had from the start; older sheets may lack the rest
+# until _ensure_month_sheet patches their header, so reads must accept either.
+_TX_BASE_HEADER = TRANSACTIONS_HEADER[:10]
+TX_RANGE = "A:L"
 BUDGET_HEADER = ["scope", "limit_vnd", "period"]
 CONFIG_HEADER = ["description", "category"]
 CATEGORIES_HEADER = ["key", "name", "emoji", "income", "keywords"]
@@ -181,7 +189,7 @@ async def init_sheets() -> None:
             elif data_rows:
                 # Both exist: copy old data rows into T6.2026 then delete T6/2026
                 from urllib.parse import quote as _q
-                await _append_values(_sr(current_month, "A:J"), data_rows)
+                await _append_values(_sr(current_month, TX_RANGE), data_rows)
                 r = await client.post(
                     f"{SHEETS_BASE}/{sheet_id}:batchUpdate",
                     headers=await _auth_headers(),
@@ -307,6 +315,7 @@ async def _append_values(range_: str, values: list[list]) -> None:
         json={"values": values},
     )
     r.raise_for_status()
+    changes.notify()
 
 
 async def _set_values(range_: str, values: list[list]) -> None:
@@ -319,6 +328,7 @@ async def _set_values(range_: str, values: list[list]) -> None:
         json={"values": values},
     )
     r.raise_for_status()
+    changes.notify()
 
 
 async def _delete_row(sheet_gid: int, row_index: int) -> None:
@@ -340,6 +350,7 @@ async def _delete_row(sheet_gid: int, row_index: int) -> None:
         }]},
     )
     r.raise_for_status()
+    changes.notify()
 
 
 async def _get_sheet_gid(sheet_name: str) -> int:
@@ -351,6 +362,28 @@ async def _get_sheet_gid(sheet_name: str) -> int:
         if s["properties"]["title"] == sheet_name:
             return s["properties"]["sheetId"]
     raise ValueError(f"Sheet '{sheet_name}' not found")
+
+
+async def _ensure_min_columns(sheet_name: str, count: int) -> None:
+    sheet_id = _sheet_id()
+    client = get_httpx_client()
+    r = await client.get(f"{SHEETS_BASE}/{sheet_id}", headers=await _auth_headers())
+    r.raise_for_status()
+    for s in r.json().get("sheets", []):
+        props = s["properties"]
+        if props["title"] != sheet_name:
+            continue
+        missing = count - props.get("gridProperties", {}).get("columnCount", 0)
+        if missing > 0:
+            r = await client.post(
+                f"{SHEETS_BASE}/{sheet_id}:batchUpdate",
+                headers=await _auth_headers(),
+                json={"requests": [{"appendDimension": {
+                    "sheetId": props["sheetId"], "dimension": "COLUMNS", "length": missing,
+                }}]},
+            )
+            r.raise_for_status()
+        return
 
 
 # ── Monthly sheet helpers ─────────────────────────────────────────────────────
@@ -410,7 +443,9 @@ async def _ensure_month_sheet(name: str) -> None:
         _known_month_sheets.add(name)
         return
     if values and values[0] and TRANSACTIONS_HEADER[:len(values[0])] == values[0]:
-        # Header exists but missing new columns — patch
+        # Header exists but missing new columns — patch (widening the grid first,
+        # since writes past the sheet's last column are rejected)
+        await _ensure_min_columns(name, len(TRANSACTIONS_HEADER))
         extra = TRANSACTIONS_HEADER[len(values[0]):]
         start_col = chr(ord('A') + len(values[0]))
         end_col = chr(ord('A') + len(TRANSACTIONS_HEADER) - 1)
@@ -434,6 +469,10 @@ async def _ensure_month_sheet(name: str) -> None:
     await _set_values(_sr(name, "A1"), [TRANSACTIONS_HEADER])
     _known_month_sheets.add(name)
     logger.info(f"[sheets] wrote header for '{name}'")
+
+
+def _is_tx_header(header: list) -> bool:
+    return header[:len(_TX_BASE_HEADER)] == _TX_BASE_HEADER
 
 
 # ── Time helpers ──────────────────────────────────────────────────────────────
@@ -481,6 +520,8 @@ async def add_transaction(
     tx_id: Optional[str] = None,
     user_name: str = "",
     excluded: bool = False,
+    chat_id: Optional[int] = None,
+    message_id: Optional[int] = None,
 ) -> str:
     if timestamp is None:
         timestamp = now_vn()
@@ -498,11 +539,13 @@ async def add_transaction(
         "Y" if auto_classified else "N",
         user_name,
         "Y" if excluded else "",
+        str(chat_id) if chat_id is not None else "",
+        str(message_id) if message_id is not None else "",
     ]
     sheet_name = _month_sheet_name(timestamp)
     await _ensure_month_sheet(sheet_name)
     logger.info(f"[sheets] add_transaction: writing tx_id={tx_id} to '{sheet_name}'")
-    await _append_values(_sr(sheet_name, "A:J"), [row])
+    await _append_values(_sr(sheet_name, TX_RANGE), [row])
     logger.info(f"[sheets] add_transaction: done tx_id={tx_id}")
     return tx_id
 
@@ -547,8 +590,8 @@ async def get_recent_transactions(
             for _ in range(i):
                 month_dt = _prev_month(month_dt)
         sheet_name = _month_sheet_name(month_dt)
-        rows = await _safe_get_values(_sr(sheet_name, "A:J"))
-        if not rows or rows[0] != TRANSACTIONS_HEADER:
+        rows = await _safe_get_values(_sr(sheet_name, TX_RANGE))
+        if not rows or not _is_tx_header(rows[0]):
             if i > 0:
                 break  # no more historical months
             continue
@@ -579,7 +622,7 @@ async def get_transaction_by_id(tx_id: str) -> Optional[tuple[int, dict, str]]:
             for _ in range(i):
                 month_dt = _prev_month(month_dt)
         sheet_name = _month_sheet_name(month_dt)
-        rows = await _safe_get_values(_sr(sheet_name, "A:J"))
+        rows = await _safe_get_values(_sr(sheet_name, TX_RANGE))
         if not rows:
             if i > 0:
                 break
@@ -602,6 +645,8 @@ async def update_transaction_field(tx_id: str, field: str, value) -> bool:
         "auto_classified": COL_AUTO,
         "user_name": COL_USER_NAME,
         "excluded": COL_EXCLUDED,
+        "chat_id": COL_CHAT_ID,
+        "message_id": COL_MESSAGE_ID,
     }
     col = col_map.get(field)
     if col is None:
@@ -611,19 +656,22 @@ async def update_transaction_field(tx_id: str, field: str, value) -> bool:
     if not result:
         return False
     row_idx, _, sheet_name = result
+    if col >= len(_TX_BASE_HEADER):
+        await _ensure_month_sheet(sheet_name)
     col_letter = chr(ord('A') + col)
     await _set_values(_sr(sheet_name, f"{col_letter}{row_idx}"), [[value]])
     return True
 
 
-async def delete_transaction(tx_id: str) -> bool:
+async def delete_transaction(tx_id: str) -> Optional[dict]:
+    """Delete the row; returns the deleted row's dict (truthy) or None if not found."""
     result = await get_transaction_by_id(tx_id)
     if not result:
-        return False
-    row_idx, _, sheet_name = result
+        return None
+    row_idx, row, sheet_name = result
     gid = await _get_sheet_gid(sheet_name)
     await _delete_row(gid, row_idx - 1)
-    return True
+    return row
 
 
 async def get_transactions_range(
@@ -635,8 +683,8 @@ async def get_transactions_range(
     sheet_names = _months_in_range(start, end)
     results = []
     for sheet_name in sheet_names:
-        rows = await _safe_get_values(_sr(sheet_name, "A:J"))
-        if not rows or rows[0] != TRANSACTIONS_HEADER:
+        rows = await _safe_get_values(_sr(sheet_name, TX_RANGE))
+        if not rows or not _is_tx_header(rows[0]):
             continue
         for row in rows[1:]:
             row = _pad_row(row, len(TRANSACTIONS_HEADER))

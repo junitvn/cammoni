@@ -16,6 +16,7 @@ from sheets import (
 from classifier import CATEGORY_INFO, CATEGORY_KEYS, INCOME_CATEGORY_KEYS, EXPENSE_CATEGORY_KEYS
 from parser import format_amount, parse_amount_search, format_amount_range, normalize_vn
 from sheets import parse_ts as _parse_ts
+import tx_message
 import users as user_store
 
 
@@ -385,6 +386,7 @@ async def edit_enter_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     ok = await update_transaction_field(tx_id, field, value)
     if ok:
         await update.message.reply_text("✅ Đã cập nhật!")
+        await tx_message.sync_by_id(tx_id)
     else:
         await update.message.reply_text("❌ Không tìm thấy khoản để sửa.")
     return ConversationHandler.END
@@ -405,6 +407,7 @@ async def edit_choose_category_callback(update: Update, context: ContextTypes.DE
             import asyncio
             asyncio.create_task(upsert_config_mapping(desc, new_cat))
         await query.edit_message_text(f"✅ Đã cập nhật: {info['emoji']} {info['name']}")
+        await tx_message.sync_by_id(tx_id)
     else:
         await query.edit_message_text("❌ Không tìm thấy khoản để sửa.")
     return ConversationHandler.END
@@ -416,9 +419,10 @@ async def delete_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if query.data == "confirm_delete":
         tx_id = context.user_data.get("del_tx_id")
-        ok = await delete_transaction(tx_id)
-        if ok:
+        deleted = await delete_transaction(tx_id)
+        if deleted:
             await query.edit_message_text("🗑 Đã xóa khoản.")
+            await tx_message.mark_deleted(deleted)
         else:
             await query.edit_message_text("❌ Không tìm thấy khoản để xóa.")
     else:

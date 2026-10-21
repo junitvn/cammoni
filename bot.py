@@ -36,7 +36,7 @@ from telegram.ext import (
 from parser import parse_message, parse_batch_message, format_amount
 import classifier
 from classifier import (
-    classify, category_display, CATEGORY_INFO
+    classify, CATEGORY_INFO
 )
 from sheets import (
     add_transaction, update_transaction_field, now_vn, format_ts, init_sheets,
@@ -44,6 +44,8 @@ from sheets import (
     load_user_names_from_sheet, set_budget, delete_transaction,
     get_transaction_by_id, TZ,
 )
+import changes
+import tx_message
 import users as user_store
 from stats import compute_stats, format_stats_text, check_budget_warning, format_top_text
 from charts import generate_charts
@@ -351,8 +353,6 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Classify
     cat_key, ai_used = await classify(result.description, result.amount, result.tx_type)
 
-    cat_disp = category_display(cat_key)
-    amt_str = format_amount(result.amount)
     tx_id = str(uuid.uuid4())[:8]
 
     # Store for later use in recat/date handlers
@@ -363,17 +363,13 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
     display_name = user_store.get_name(
         _user(update).id, _user(update).first_name or ""
     )
-    name_part = f" ({display_name})" if display_name else ""
-    type_label = "Thu nhập" if result.tx_type == "thu" else "Chi tiêu"
-    date_str = f"{timestamp.day}/{timestamp.month}"
-    reply_text = (
-        f"✅ {date_str} {type_label}{name_part}:\n"
-        f"  {cat_disp} · {result.description}\n"
-        f"  💰 {amt_str}"
-    )
+    reply_text = tx_message.format_text({
+        "timestamp": format_ts(timestamp), "type": result.tx_type, "user_name": display_name,
+        "category": cat_key, "description": result.description, "amount": result.amount,
+    })
 
     keyboard = _action_sheet_kb(tx_id)
-    await _message(update).reply_text(reply_text, reply_markup=keyboard, parse_mode="Markdown")
+    sent = await _message(update).reply_text(reply_text, reply_markup=keyboard)
 
     # Write to sheet in background (async, no executor needed)
     async def _save():
@@ -388,6 +384,8 @@ async def handle_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 timestamp=timestamp,
                 tx_id=tx_id,
                 user_name=display_name,
+                chat_id=sent.chat_id,
+                message_id=sent.message_id,
             )
             logger.info(f"[bot] saved tx_id={tx_id}")
             if result.tx_type == "chi":
@@ -438,8 +436,6 @@ async def _handle_batch_transactions(
 
     for tx_type, amount, description, date_day, date_month, date_offset in parsed:
         cat_key, _ = await classify(description, amount, tx_type)
-        cat_disp = category_display(cat_key)
-        amt_str = format_amount(amount)
         tx_id = str(uuid.uuid4())[:8]
         if date_day:
             timestamp = _resolve_timestamp(date_day, date_month)
@@ -452,25 +448,22 @@ async def _handle_batch_transactions(
         _user_data(context)[f"tx_type_{tx_id}"] = tx_type
         _user_data(context)[f"tx_ts_{tx_id}"] = timestamp
 
-        name_part = f" ({uname})" if uname else ""
-        type_label = "Thu nhập" if tx_type == "thu" else "Chi tiêu"
-        date_str = f"{timestamp.day}/{timestamp.month}"
-        text = (
-            f"✅ {date_str} {type_label}{name_part}:\n"
-            f"  {cat_disp} · {description}\n"
-            f"  💰 {amt_str}"
-        )
+        text = tx_message.format_text({
+            "timestamp": format_ts(timestamp), "type": tx_type, "user_name": uname,
+            "category": cat_key, "description": description, "amount": amount,
+        })
 
         keyboard = _action_sheet_kb(tx_id)
-        await _effective_message(update).reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+        sent = await _effective_message(update).reply_text(text, reply_markup=keyboard)
 
         async def _save(u=uid, un=uname, tt=tx_type, a=amount, ck=cat_key,
-                        d=description, ts=timestamp, tid=tx_id):
+                        d=description, ts=timestamp, tid=tx_id, msg=sent):
             try:
                 await add_transaction(
                     user_id=u, tx_type=tt, amount=a, category=ck,
                     description=d, auto_classified=True,
                     timestamp=ts, tx_id=tid, user_name=un,
+                    chat_id=msg.chat_id, message_id=msg.message_id,
                 )
                 logger.info(f"[bot] saved batch tx_id={tid}")
                 if tt == "chi":
@@ -704,10 +697,11 @@ async def handle_qdelok(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_reply_markup(reply_markup=_action_sheet_kb(tx_id))
         return
     tx_id = _callback_data(query).replace("qdelok_", "")
-    ok = await delete_transaction(tx_id)
+    deleted = await delete_transaction(tx_id)
     first_line = (_callback_message(query).text or "").split("\n")[0]
-    if ok:
+    if deleted:
         await query.edit_message_text(f"🗑️ Đã xóa: {first_line}")
+        await tx_message.mark_deleted(deleted, skip_message_id=_callback_message(query).message_id)
     else:
         await query.edit_message_text("❌ Không tìm thấy khoản.")
 
@@ -724,6 +718,7 @@ async def handle_qexcl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     currently_excluded = str(row.get("excluded", "")).strip().upper() == "Y"
     new_val = "" if currently_excluded else "Y"
     await update_transaction_field(tx_id, "excluded", new_val)
+    await tx_message.sync({**row, "excluded": new_val}, skip_message_id=_callback_message(query).message_id)
 
     old_text = _callback_message(query).text or ""
     skip_prefixes = ("🚫", "✅ Đã tính", "🔴", "⚠️")
@@ -1144,6 +1139,8 @@ def main() -> None:
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise ValueError("BOT_TOKEN not set in .env")
+
+    changes.install_webapp_notifier()
 
     app = (
         Application.builder()

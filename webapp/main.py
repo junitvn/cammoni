@@ -23,6 +23,7 @@ from webapp.routes_analysis import router as analysis_router
 from webapp.routes_balance import router as balance_router
 from webapp.routes_budgets import router as budgets_router
 from webapp.routes_categories import router as categories_router
+from webapp.routes_changes import router as changes_router
 from webapp.routes_home import router as home_router
 from webapp.routes_transactions import router as transactions_router
 
@@ -65,3 +66,4 @@ app.include_router(home_router)
 app.include_router(analysis_router)
 app.include_router(budgets_router)
 app.include_router(balance_router)
+app.include_router(changes_router)

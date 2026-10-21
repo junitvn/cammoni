@@ -41,19 +41,25 @@ Oracle/Docker chỉ chạy Telegram bot + FastAPI backend (`webapp/`). Frontend 
 | `editor.py` | ConversationHandler `/edit` và `/search`: paging, 4-button actions |
 | `budget.py` | ConversationHandler `/budget`: đặt/xem ngân sách |
 | `webapp/routes_budgets.py` | `/api/budgets` (GET/PUT) cho Mini App, phần của "moni-app API" (`webapp/`) đang chạy production |
+| `tx_message.py` | Format + sửa tin nhắn xác nhận khoản thu chi qua Bot API (httpx) — dùng chung cho bot và webapp |
+| `changes.py` | Tín hiệu "dữ liệu đổi": `sheets.py` gọi `notify()` sau mỗi lần ghi; bot forward sang webapp (`POST /api/internal/changed`) |
+| `webapp/routes_changes.py` | `GET /api/changes` → version; Mini App poll 4s, version đổi thì refetch |
 | `users.py` | Cache tên user `{user_id: name}`, dùng chung giữa các module |
 | `config/users.yaml` | Whitelist user IDs + tên hiển thị (nguồn chính để quản lý quyền) |
 | `config/categories.yaml` | Không dùng runtime; seed categories trong `sheets.py._CATEGORIES_SEED` |
 
 ## Google Sheets schema
 
-Sheet **Transactions** — cột A→J:
-`id | timestamp | user | type | amount | category | description | auto_classified | user_name | excluded`
+Sheet **Transactions** (mỗi tháng một sheet `T10.2026`) — cột A→L:
+`id | timestamp | user | type | amount | category | description | auto_classified | user_name | excluded | chat_id | message_id`
 
 - `type`: `chi` hoặc `thu`
 - `amount`: VND (số tiền × 1000)
 - `auto_classified`: `Y`/`N`
 - `excluded`: `Y` = không tính vào ngân sách/thống kê
+- `chat_id`/`message_id`: tin nhắn xác nhận của bot cho khoản này (trống nếu tạo từ Mini App). Sửa/xóa ở bot hoặc Mini App đều gọi `tx_message.sync()`/`mark_deleted()` để cập nhật tin nhắn đó. Sheet tháng cũ chỉ có header A→J vẫn đọc được (`_is_tx_header` so prefix), header được vá khi ghi.
+
+**Đồng bộ bot ↔ Mini App**: mọi lần ghi sheet → `changes.notify()`. Webapp tăng version; bot POST tới `WEBAPP_INTERNAL_URL` (mặc định `http://webapp:8000`, xác thực bằng `X-Internal-Token` = sha256 từ `BOT_TOKEN`). Mini App poll `/api/changes` và invalidate toàn bộ query khi version đổi.
 
 Sheet **Budget**: `scope | limit_vnd | period` (scope = `chung` hoặc category key)
 Sheet **Categories**: `key | name | emoji | income | keywords` (seed khi khởi động lần đầu)

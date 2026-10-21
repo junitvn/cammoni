@@ -1,8 +1,9 @@
 """CRUD for transactions — a thin wrapper over sheets.py, reusing the bot's classify() logic."""
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
+import tx_message
 from classifier import EXPENSE_CATEGORY_KEYS, INCOME_CATEGORY_KEYS, classify
 from parser import normalize_vn, parse_amount_search
 from sheets import (
@@ -123,7 +124,12 @@ async def create_transaction(body: TransactionCreate, user: CurrentUser = Depend
 
 
 @router.put("/{tx_id}", response_model=TransactionOut)
-async def edit_transaction(tx_id: str, body: TransactionUpdate, user: CurrentUser = Depends(get_current_user)):
+async def edit_transaction(
+    tx_id: str,
+    body: TransactionUpdate,
+    background: BackgroundTasks,
+    user: CurrentUser = Depends(get_current_user),
+):
     result = await get_transaction_by_id(tx_id)
     if not result:
         raise HTTPException(404, "Transaction not found")
@@ -163,11 +169,18 @@ async def edit_transaction(tx_id: str, body: TransactionUpdate, user: CurrentUse
         await update_transaction_field(tx_id, "user_name", body.user_name)
 
     result = await get_transaction_by_id(tx_id)
+    # Keep the bot's confirmation message for this transaction in step with the edit.
+    background.add_task(tx_message.sync, result[1])
     return row_to_out(result[1])
 
 
 @router.delete("/{tx_id}", status_code=204)
-async def remove_transaction(tx_id: str, user: CurrentUser = Depends(get_current_user)):
-    ok = await delete_transaction(tx_id)
-    if not ok:
+async def remove_transaction(
+    tx_id: str,
+    background: BackgroundTasks,
+    user: CurrentUser = Depends(get_current_user),
+):
+    deleted = await delete_transaction(tx_id)
+    if not deleted:
         raise HTTPException(404, "Transaction not found")
+    background.add_task(tx_message.mark_deleted, deleted)

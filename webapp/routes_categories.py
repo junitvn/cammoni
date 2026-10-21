@@ -2,9 +2,10 @@
 import re
 import unicodedata
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 import classifier
+import tx_message
 from sheets import (
     add_category, delete_category, get_recent_transactions,
     load_categories_from_sheet, update_category, update_transaction_field,
@@ -61,6 +62,7 @@ async def edit_category(key: str, body: CategoryUpdate, user: CurrentUser = Depe
 @router.delete("/{key}", status_code=204)
 async def remove_category(
     key: str,
+    background: BackgroundTasks,
     reassign: bool = Query(False),
     user: CurrentUser = Depends(get_current_user),
 ):
@@ -79,6 +81,7 @@ async def remove_category(
             raise HTTPException(400, "No fallback category available to reassign to")
         for row in in_use:
             await update_transaction_field(row["id"], "category", fallback)
+            background.add_task(tx_message.sync, {**row, "category": fallback})
 
     await delete_category(key)
     classifier.reload_categories(await load_categories_from_sheet())
